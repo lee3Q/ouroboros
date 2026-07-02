@@ -1586,6 +1586,25 @@ def build_execute_subagent(
     else:
         qa_verify = "Run QA evaluation after execution completes and confirm it passes."
 
+    verify_lines: list[str] = [
+        "Every acceptance criterion in the seed is satisfied.",
+        qa_verify,
+    ]
+    if cwd:
+        # Deterministic project verify commands (parsed from
+        # .ouroboros/mechanical.toml) so the worker runs the project's real
+        # test/lint checks instead of guessing. Best-effort — omitted when
+        # the project has no detected commands.
+        from pathlib import Path
+
+        from ouroboros.orchestrator.context_pack import detected_verify_commands
+
+        commands = detected_verify_commands(Path(cwd))
+        if commands:
+            verify_lines.append(
+                "Project verify commands (run before claiming done): " + "; ".join(commands)
+            )
+
     seed_body = (
         "## Seed Specification\n"
         "```yaml\n"
@@ -1605,10 +1624,7 @@ def build_execute_subagent(
             "A working implementation in which every acceptance criterion in the seed is satisfied."
         ),
         scope=tuple(scope_lines),
-        verify=(
-            "Every acceptance criterion in the seed is satisfied.",
-            qa_verify,
-        ),
+        verify=tuple(verify_lines),
         body=seed_body,
     ).render()
 

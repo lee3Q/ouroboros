@@ -201,11 +201,14 @@ class ExecutionConfig(BaseModel, frozen=True):
         max_iterations_per_ac: Maximum iterations per acceptance criteria
         retrospective_interval: Iterations between retrospectives
         tui_autolaunch: Whether `ooo run` should open the TUI without prompting
+        context_pack: Whether to append a deterministic repo context pack
+            (stack, verify commands, layout) to run worker system prompts.
     """
 
     max_iterations_per_ac: int = Field(default=10, ge=1)
     retrospective_interval: int = Field(default=3, ge=1)
     tui_autolaunch: bool = False
+    context_pack: bool = True
 
 
 class ResilienceConfig(BaseModel, frozen=True):
