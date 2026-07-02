@@ -17,12 +17,12 @@ from dataclasses import dataclass, field
 import json
 import logging
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ouroboros.config import get_llm_backend_for_role, get_llm_model_for_role
 from ouroboros.core.errors import ProviderError
 from ouroboros.core.lineage import EvaluationSummary, MutationAction, OntologyDelta, OntologyLineage
-from ouroboros.core.seed import Seed
+from ouroboros.core.seed import Seed, ac_texts
 from ouroboros.core.text import truncate_head_tail
 from ouroboros.core.types import Result
 from ouroboros.evolution.regression import RegressionDetector
@@ -64,6 +64,13 @@ class ReflectOutput(BaseModel, frozen=True):
     refined_acs: tuple[str, ...] = Field(default_factory=tuple)
     ontology_mutations: tuple[OntologyMutation, ...] = Field(default_factory=tuple)
     reasoning: str = ""
+
+    @field_validator("refined_acs", mode="before")
+    @classmethod
+    def _coerce_refined_acs(cls, value: object) -> object:
+        if isinstance(value, list | tuple):
+            return ac_texts(value)
+        return value
 
 
 @dataclass
@@ -294,7 +301,7 @@ Guidelines:
         parts = ["## Current Seed"]
         parts.append(f"Goal: {seed.goal}")
         parts.append(f"Constraints: {list(seed.constraints)}")
-        parts.append(f"Acceptance Criteria: {list(seed.acceptance_criteria)}")
+        parts.append(f"Acceptance Criteria: {list(ac_texts(seed.acceptance_criteria))}")
 
         parts.append(f"\n## Ontology: {seed.ontology_schema.name}")
         parts.append(f"Description: {seed.ontology_schema.description}")
@@ -433,7 +440,9 @@ Guidelines:
                 refined_constraints=tuple(
                     data.get("refined_constraints", list(current_seed.constraints))
                 ),
-                refined_acs=tuple(data.get("refined_acs", list(current_seed.acceptance_criteria))),
+                refined_acs=tuple(
+                    data.get("refined_acs", list(ac_texts(current_seed.acceptance_criteria)))
+                ),
                 ontology_mutations=tuple(mutations),
                 reasoning=data.get("reasoning", ""),
             )
