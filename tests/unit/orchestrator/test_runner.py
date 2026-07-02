@@ -19,6 +19,7 @@ from ouroboros.core.seed import (
     OntologySchema,
     Seed,
     SeedMetadata,
+    ac_text,
 )
 from ouroboros.core.types import Result
 from ouroboros.core.worktree import TaskWorkspace
@@ -127,7 +128,7 @@ class TestBuildSystemPrompt:
         task_prompt = build_task_prompt(sample_seed)
 
         assert "## Acceptance Criteria" not in system_prompt
-        for criterion in sample_seed.acceptance_criteria:
+        for criterion in (ac_text(ac) for ac in sample_seed.acceptance_criteria):
             assert criterion not in system_prompt
             assert criterion in task_prompt
 
@@ -2269,9 +2270,11 @@ class TestOrchestratorRunner:
         tracker = SessionTracker.create("exec_parallel", sample_seed.metadata.seed_id)
         dependency_graph = DependencyGraph(
             nodes=(
-                ACNode(index=0, content=sample_seed.acceptance_criteria[0]),
-                ACNode(index=1, content=sample_seed.acceptance_criteria[1]),
-                ACNode(index=2, content=sample_seed.acceptance_criteria[2], depends_on=(0, 1)),
+                ACNode(index=0, content=ac_text(sample_seed.acceptance_criteria[0])),
+                ACNode(index=1, content=ac_text(sample_seed.acceptance_criteria[1])),
+                ACNode(
+                    index=2, content=ac_text(sample_seed.acceptance_criteria[2]), depends_on=(0, 1)
+                ),
             ),
             execution_levels=((0, 1), (2,)),
         )
@@ -2279,19 +2282,19 @@ class TestOrchestratorRunner:
             results=(
                 ACExecutionResult(
                     ac_index=0,
-                    ac_content=sample_seed.acceptance_criteria[0],
+                    ac_content=ac_text(sample_seed.acceptance_criteria[0]),
                     success=True,
                     final_message="done",
                 ),
                 ACExecutionResult(
                     ac_index=1,
-                    ac_content=sample_seed.acceptance_criteria[1],
+                    ac_content=ac_text(sample_seed.acceptance_criteria[1]),
                     success=True,
                     final_message="done",
                 ),
                 ACExecutionResult(
                     ac_index=2,
-                    ac_content=sample_seed.acceptance_criteria[2],
+                    ac_content=ac_text(sample_seed.acceptance_criteria[2]),
                     success=True,
                     final_message="done",
                 ),
@@ -2353,14 +2356,14 @@ class TestOrchestratorRunner:
         )
         tracker = SessionTracker.create("exec_parallel", sample_seed.metadata.seed_id)
         dependency_graph = DependencyGraph(
-            nodes=(ACNode(index=0, content=sample_seed.acceptance_criteria[0]),),
+            nodes=(ACNode(index=0, content=ac_text(sample_seed.acceptance_criteria[0])),),
             execution_levels=((0,),),
         )
         parallel_result = ParallelExecutionResult(
             results=(
                 ACExecutionResult(
                     ac_index=0,
-                    ac_content=sample_seed.acceptance_criteria[0],
+                    ac_content=ac_text(sample_seed.acceptance_criteria[0]),
                     success=True,
                     final_message="done",
                 ),
@@ -2430,14 +2433,14 @@ class TestOrchestratorRunner:
         )
         tracker = SessionTracker.create("exec_parallel", sample_seed.metadata.seed_id)
         dependency_graph = DependencyGraph(
-            nodes=(ACNode(index=0, content=sample_seed.acceptance_criteria[0]),),
+            nodes=(ACNode(index=0, content=ac_text(sample_seed.acceptance_criteria[0])),),
             execution_levels=((0,),),
         )
         parallel_result = ParallelExecutionResult(
             results=(
                 ACExecutionResult(
                     ac_index=0,
-                    ac_content=sample_seed.acceptance_criteria[0],
+                    ac_content=ac_text(sample_seed.acceptance_criteria[0]),
                     success=True,
                     final_message="done",
                 ),
@@ -2676,7 +2679,7 @@ class TestOrchestratorRunner:
             results=(
                 ACExecutionResult(
                     ac_index=0,
-                    ac_content=sample_seed.acceptance_criteria[0],
+                    ac_content=ac_text(sample_seed.acceptance_criteria[0]),
                     success=True,
                     final_message="done",
                 ),
@@ -3255,7 +3258,7 @@ class TestOrchestratorRunner:
                     results=(
                         ACExecutionResult(
                             ac_index=0,
-                            ac_content=sample_seed.acceptance_criteria[0],
+                            ac_content=ac_text(sample_seed.acceptance_criteria[0]),
                             success=True,
                             is_decomposed=True,
                             sub_results=(sub_result,),
@@ -3263,13 +3266,13 @@ class TestOrchestratorRunner:
                         ),
                         ACExecutionResult(
                             ac_index=1,
-                            ac_content=sample_seed.acceptance_criteria[1],
+                            ac_content=ac_text(sample_seed.acceptance_criteria[1]),
                             success=True,
                             final_message="Listed tasks correctly.",
                         ),
                         ACExecutionResult(
                             ac_index=2,
-                            ac_content=sample_seed.acceptance_criteria[2],
+                            ac_content=ac_text(sample_seed.acceptance_criteria[2]),
                             success=True,
                             final_message="Deleted tasks correctly.",
                         ),

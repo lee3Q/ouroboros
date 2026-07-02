@@ -4,17 +4,21 @@ Tests the immutable Seed schema and related types.
 """
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 from pydantic import ValidationError as PydanticValidationError
 import pytest
 
 from ouroboros.core.seed import (
+    AcceptanceCriterionSpec,
     EvaluationPrinciple,
     ExitCondition,
     OntologyField,
     OntologySchema,
     Seed,
     SeedMetadata,
+    ac_text,
+    parse_acceptance_criterion,
 )
 
 
@@ -430,7 +434,9 @@ class TestSeed:
         assert isinstance(seed_dict, dict)
         assert seed_dict["goal"] == full_seed.goal
         assert seed_dict["constraints"] == list(full_seed.constraints)
-        assert seed_dict["acceptance_criteria"] == list(full_seed.acceptance_criteria)
+        assert seed_dict["acceptance_criteria"] == [
+            ac_text(ac) for ac in full_seed.acceptance_criteria
+        ]
         assert seed_dict["ontology_schema"]["name"] == full_seed.ontology_schema.name
         assert seed_dict["metadata"]["ambiguity_score"] == full_seed.metadata.ambiguity_score
 
@@ -678,3 +684,120 @@ class TestSeedImmutabilityComprehensive:
         assert isinstance(seed.constraints, tuple)
         assert not hasattr(seed.constraints, "append")
         assert not hasattr(seed.constraints, "extend")
+
+
+class TestAcceptanceCriterionSpec:
+    """Test the acceptance-criterion success-contract schema (PR-V Step 1)."""
+
+    def test_bare_string_ac_validates_and_coerces_to_spec(self) -> None:
+        """A legacy bare-string AC stays valid and lifts into a spec."""
+        seed = Seed(
+            goal="g",
+            acceptance_criteria=("Tasks can be created",),
+            ontology_schema=OntologySchema(name="n", description="d"),
+            metadata=SeedMetadata(ambiguity_score=0.1),
+        )
+
+        assert isinstance(seed.acceptance_criteria[0], AcceptanceCriterionSpec)
+        assert seed.acceptance_criteria[0].description == "Tasks can be created"
+        assert seed.acceptance_criteria[0].is_description_only
+        assert ac_text(seed.acceptance_criteria[0]) == "Tasks can be created"
+
+    def test_spec_ac_validates_with_full_contract(self) -> None:
+        """An explicit contract spec is preserved end to end."""
+        spec = AcceptanceCriterionSpec(
+            description="Docs build",
+            verify_command="mkdocs build",
+            expected_artifacts=("site/index.html",),
+            output_assertion="Success",
+        )
+        seed = Seed(
+            goal="g",
+            acceptance_criteria=(spec,),
+            ontology_schema=OntologySchema(name="n", description="d"),
+            metadata=SeedMetadata(ambiguity_score=0.1),
+        )
+
+        stored = seed.acceptance_criteria[0]
+        assert stored.verify_command == "mkdocs build"
+        assert stored.expected_artifacts == ("site/index.html",)
+        assert stored.output_assertion == "Success"
+        assert not stored.is_description_only
+
+    def test_description_only_spec_serializes_to_bare_string(self) -> None:
+        """Description-only specs serialize back to bare strings."""
+        seed = Seed(
+            goal="g",
+            acceptance_criteria=("a", "b"),
+            ontology_schema=OntologySchema(name="n", description="d"),
+            metadata=SeedMetadata(ambiguity_score=0.1),
+        )
+
+        assert seed.to_dict()["acceptance_criteria"] == ["a", "b"]
+
+    def test_contract_spec_serializes_to_dict(self) -> None:
+        """A spec carrying a contract serializes to a structured dict."""
+        spec = AcceptanceCriterionSpec(
+            description="x",
+            verify_command="pytest -q",
+            expected_artifacts=("docs/x.md",),
+            output_assertion="passed",
+        )
+        seed = Seed(
+            goal="g",
+            acceptance_criteria=(spec, "plain"),
+            ontology_schema=OntologySchema(name="n", description="d"),
+            metadata=SeedMetadata(ambiguity_score=0.1),
+        )
+
+        dumped = seed.to_dict()["acceptance_criteria"]
+        assert dumped == [
+            {
+                "description": "x",
+                "verify_command": "pytest -q",
+                "expected_artifacts": ["docs/x.md"],
+                "output_assertion": "passed",
+            },
+            "plain",
+        ]
+
+    def test_real_seed_fixture_round_trips_byte_identically(self) -> None:
+        """A real on-disk seed with string ACs round-trips byte-identically."""
+        import yaml
+
+        fixture = Path(__file__).resolve().parents[3] / "examples" / "dummy_seed.yaml"
+        raw = yaml.safe_load(fixture.read_text())
+
+        seed = Seed.from_dict(raw)
+        dumped = seed.to_dict()
+
+        # The acceptance criteria survive as the original bare strings.
+        assert dumped["acceptance_criteria"] == raw["acceptance_criteria"]
+        # Reloading the dumped dict yields an identical serialization.
+        assert Seed.from_dict(dumped).to_dict() == dumped
+
+    def test_parse_pytest_contract_line(self) -> None:
+        """The architect contract format fills every spec field."""
+        spec = parse_acceptance_criterion(
+            "Users can create a task | verify: pytest -q | artifacts: NONE | expect: passed"
+        )
+        assert spec.description == "Users can create a task"
+        assert spec.verify_command == "pytest -q"
+        assert spec.expected_artifacts == ()
+        assert spec.output_assertion == "passed"
+
+    def test_parse_artifacts_only_contract_line(self) -> None:
+        """A docs-style AC keeps its artifacts and leaves verify unset."""
+        spec = parse_acceptance_criterion(
+            "README documents install | verify: NONE | artifacts: README.md, docs/x.md | expect: NONE"
+        )
+        assert spec.description == "README documents install"
+        assert spec.verify_command is None
+        assert spec.expected_artifacts == ("README.md", "docs/x.md")
+        assert spec.output_assertion is None
+
+    def test_parse_plain_line_is_description_only(self) -> None:
+        """A criterion with no contract fields never fails parsing."""
+        spec = parse_acceptance_criterion("just a plain outcome")
+        assert spec.description == "just a plain outcome"
+        assert spec.is_description_only

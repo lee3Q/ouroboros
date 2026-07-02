@@ -37,6 +37,7 @@ from rich.text import Text
 from ouroboros.backends import backend_supports_tool_envelope
 from ouroboros.config import get_llm_model_for_role
 from ouroboros.core.errors import OuroborosError
+from ouroboros.core.seed import ac_text
 from ouroboros.core.seed_contract import SeedContract
 from ouroboros.core.seed_contract_prompt import (
     render_auto_recursion_guard,
@@ -339,7 +340,7 @@ def build_task_prompt(
     if strategy is None:
         strategy = get_strategy(seed.task_type)
 
-    ac_list = "\n".join(f"{i + 1}. {ac}" for i, ac in enumerate(seed.acceptance_criteria))
+    ac_list = "\n".join(f"{i + 1}. {ac_text(ac)}" for i, ac in enumerate(seed.acceptance_criteria))
     suffix = strategy.get_task_prompt_suffix()
 
     return f"""Execute the following task according to the acceptance criteria:
@@ -2840,7 +2841,7 @@ class OrchestratorRunner:
             self._console.print("\n[cyan]Preparing sequential AC execution plan...[/cyan]")
             dependency_graph = DependencyGraph(
                 nodes=tuple(
-                    ACNode(index=i, content=ac, depends_on=tuple(range(i)))
+                    ACNode(index=i, content=ac_text(ac), depends_on=tuple(range(i)))
                     for i, ac in enumerate(seed.acceptance_criteria)
                 ),
                 execution_levels=tuple((i,) for i in range(len(seed.acceptance_criteria))),
@@ -2849,7 +2850,9 @@ class OrchestratorRunner:
             self._console.print("\n[cyan]Analyzing AC dependencies...[/cyan]")
 
             analyzer = self._build_dependency_analyzer()
-            dep_result = await analyzer.analyze(seed.acceptance_criteria)
+            dep_result = await analyzer.analyze(
+                tuple(ac_text(ac) for ac in seed.acceptance_criteria)
+            )
 
             if dep_result.is_err:
                 log.warning(
@@ -2861,7 +2864,7 @@ class OrchestratorRunner:
                 all_indices = tuple(range(len(seed.acceptance_criteria)))
                 dependency_graph = DependencyGraph(
                     nodes=tuple(
-                        ACNode(index=i, content=ac, depends_on=())
+                        ACNode(index=i, content=ac_text(ac), depends_on=())
                         for i, ac in enumerate(seed.acceptance_criteria)
                     ),
                     execution_levels=(all_indices,) if all_indices else (),

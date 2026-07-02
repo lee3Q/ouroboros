@@ -29,6 +29,7 @@ from ouroboros.bigbang.interview import (
 from ouroboros.config import get_llm_model_for_role
 from ouroboros.core.errors import ProviderError, ValidationError
 from ouroboros.core.seed import (
+    AcceptanceCriterionSpec,
     BrownfieldContext,
     ContextReference,
     EvaluationPrinciple,
@@ -37,6 +38,7 @@ from ouroboros.core.seed import (
     OntologySchema,
     Seed,
     SeedMetadata,
+    parse_acceptance_criterion,
 )
 from ouroboros.core.types import Result
 from ouroboros.providers.base import CompletionConfig, LLMAdapter, Message, MessageRole
@@ -560,9 +562,18 @@ PROJECT_TYPE: greenfield"""
         lines = cleaned.strip().split("\n")
         requirements: dict[str, Any] = {}
 
+        ac_spec_lines: list[str] = []
         for line in lines:
             line = line.strip()
             if not line:
+                continue
+
+            # Per-criterion contract lines: "AC: <desc> | verify: ... | ...".
+            # Collect each (they share a prefix, so the generic dict overwrite
+            # below would drop all but the last). Guard against the longer
+            # ACCEPTANCE_CRITERIA: prefix which also starts with "AC".
+            if line.startswith("AC:") and not line.startswith("ACCEPTANCE_CRITERIA:"):
+                ac_spec_lines.append(line[len("AC:") :].strip())
                 continue
 
             for prefix in self._KNOWN_PREFIXES:
@@ -571,6 +582,9 @@ PROJECT_TYPE: greenfield"""
                     value = line[len(prefix) :].strip()
                     requirements[key] = value
                     break
+
+        if ac_spec_lines:
+            requirements["ac_spec_lines"] = ac_spec_lines
 
         # Validate required fields
         required_fields = [
@@ -606,9 +620,18 @@ PROJECT_TYPE: greenfield"""
                 c.strip() for c in requirements["constraints"].split("|") if c.strip()
             )
 
-        # Parse acceptance criteria
-        acceptance_criteria: tuple[str, ...] = ()
-        if "acceptance_criteria" in requirements and requirements["acceptance_criteria"]:
+        # Parse acceptance criteria. Prefer the per-line "AC:" contract format
+        # (each line carries an optional verify/artifacts/expect contract); fall
+        # back to the legacy pipe-separated ACCEPTANCE_CRITERIA list, where each
+        # entry becomes a description-only criterion. Unparseable contract fields
+        # degrade to description-only — parsing never fails on a missing field.
+        acceptance_criteria: tuple[AcceptanceCriterionSpec | str, ...] = ()
+        ac_spec_lines = requirements.get("ac_spec_lines")
+        if isinstance(ac_spec_lines, list) and ac_spec_lines:
+            acceptance_criteria = tuple(
+                parse_acceptance_criterion(line) for line in ac_spec_lines if line.strip()
+            )
+        elif "acceptance_criteria" in requirements and requirements["acceptance_criteria"]:
             acceptance_criteria = tuple(
                 c.strip() for c in requirements["acceptance_criteria"].split("|") if c.strip()
             )

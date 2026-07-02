@@ -32,6 +32,7 @@ from ouroboros.core.seed import (
     OntologySchema,
     Seed,
     SeedMetadata,
+    ac_text,
 )
 
 # ---------------------------------------------------------------------------
@@ -600,7 +601,7 @@ async def test_handler_evaluator_builds_quality_bar_from_seed_ac() -> None:
     assert args is not None
     # Quality bar must contain every acceptance criterion
     for ac in seed.acceptance_criteria:
-        assert ac in args["quality_bar"]
+        assert ac_text(ac) in args["quality_bar"]
     # Default arg shape
     assert args["artifact_type"] == "test_output"
     assert args["pass_threshold"] == 0.80

@@ -21,7 +21,14 @@ import math
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    field_serializer,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 
 class ExitCondition(BaseModel, frozen=True):
@@ -180,6 +187,121 @@ class SeedMetadata(BaseModel, frozen=True):
     recovery_reason: str | None = Field(default=None)
 
 
+class AcceptanceCriterionSpec(BaseModel, frozen=True):
+    """A single acceptance criterion plus its optional success contract.
+
+    The contract fields are what let ``ooo run`` verify an AC by evidence
+    instead of trusting a worker's ``[TASK_COMPLETE]`` self-report:
+
+    Attributes:
+        description: Human-readable success criterion (the only mandatory
+            field). A bare-string AC coerces to a description-only spec.
+        verify_command: Optional shell command the orchestrator runs itself to
+            prove the AC (exit code 0 required). ``None`` means no runnable
+            gate — behavior stays identical to a legacy string AC.
+        expected_artifacts: Optional workspace-relative paths the AC should
+            produce.
+        output_assertion: Optional substring that must appear in the combined
+            stdout+stderr of ``verify_command`` for the gate to pass.
+
+    A description-only spec serializes BACK to a bare string so existing seed
+    files round-trip byte-identically.
+    """
+
+    model_config = {"frozen": True}
+
+    # No ``min_length`` on ``description``: legacy ``acceptance_criteria`` stored
+    # bare strings with no per-item length check, so a blank AC must remain
+    # constructible here and be rejected downstream (e.g. Workflow IR
+    # projection) exactly as before.
+    description: str = Field(...)
+    verify_command: str | None = Field(default=None)
+    expected_artifacts: tuple[str, ...] = Field(default_factory=tuple)
+    output_assertion: str | None = Field(default=None)
+
+    @property
+    def is_description_only(self) -> bool:
+        """Whether this spec carries no success contract beyond its text."""
+        return (
+            self.verify_command is None
+            and not self.expected_artifacts
+            and self.output_assertion is None
+        )
+
+    @model_serializer
+    def _serialize(self) -> str | dict[str, Any]:
+        """Serialize description-only specs to a bare string for round-trip."""
+        if self.is_description_only:
+            return self.description
+        data: dict[str, Any] = {"description": self.description}
+        if self.verify_command is not None:
+            data["verify_command"] = self.verify_command
+        if self.expected_artifacts:
+            data["expected_artifacts"] = list(self.expected_artifacts)
+        if self.output_assertion is not None:
+            data["output_assertion"] = self.output_assertion
+        return data
+
+
+def ac_text(item: AcceptanceCriterionSpec | str) -> str:
+    """Return the human-readable text of an acceptance criterion.
+
+    Accepts both the current :class:`AcceptanceCriterionSpec` and legacy bare
+    strings so consumers that only need the criterion text stay agnostic to the
+    stored shape.
+    """
+    if isinstance(item, AcceptanceCriterionSpec):
+        return item.description
+    return item
+
+
+def parse_acceptance_criterion(raw: str) -> AcceptanceCriterionSpec:
+    """Parse one authored AC line into an :class:`AcceptanceCriterionSpec`.
+
+    Supports the seed-architect contract format::
+
+        <description> | verify: <cmd or NONE> | artifacts: <a,b or NONE> | expect: <s or NONE>
+
+    The first pipe-segment is always the description. Recognized trailing
+    segments (``verify:``, ``artifacts:``, ``expect:``) fill the contract
+    fields; ``NONE``/empty values leave them unset. Unrecognized segments are
+    ignored. Parsing NEVER fails on missing contract fields — a plain criterion
+    with no pipes yields a description-only spec.
+    """
+    segments = [segment.strip() for segment in raw.split("|")]
+    description = segments[0].strip()
+    verify_command: str | None = None
+    expected_artifacts: tuple[str, ...] = ()
+    output_assertion: str | None = None
+
+    def _clean(value: str) -> str | None:
+        stripped = value.strip()
+        if not stripped or stripped.upper() == "NONE":
+            return None
+        return stripped
+
+    for segment in segments[1:]:
+        lowered = segment.lower()
+        if lowered.startswith("verify:"):
+            verify_command = _clean(segment[len("verify:") :])
+        elif lowered.startswith("artifacts:"):
+            cleaned = _clean(segment[len("artifacts:") :])
+            if cleaned is not None:
+                expected_artifacts = tuple(
+                    part.strip() for part in cleaned.split(",") if part.strip()
+                )
+        elif lowered.startswith("expect:"):
+            output_assertion = _clean(segment[len("expect:") :])
+        # Unrecognized segments are ignored — never fail on unknown fields.
+
+    return AcceptanceCriterionSpec(
+        description=description,
+        verify_command=verify_command,
+        expected_artifacts=expected_artifacts,
+        output_assertion=output_assertion,
+    )
+
+
 class Seed(BaseModel, frozen=True):
     """Immutable specification for workflow execution.
 
@@ -253,7 +375,7 @@ class Seed(BaseModel, frozen=True):
         default_factory=tuple,
         description="Hard constraints that must be satisfied",
     )
-    acceptance_criteria: tuple[str, ...] = Field(
+    acceptance_criteria: tuple[AcceptanceCriterionSpec, ...] = Field(
         default_factory=tuple,
         description="Specific criteria for success evaluation",
     )
@@ -281,6 +403,38 @@ class Seed(BaseModel, frozen=True):
         ...,
         description="Generation metadata (version, timestamp, etc.)",
     )
+
+    @field_serializer("acceptance_criteria", when_used="always")
+    def _serialize_acceptance_criteria(
+        self, value: tuple[AcceptanceCriterionSpec | str, ...]
+    ) -> list[str | dict[str, Any]]:
+        """Serialize ACs, tolerating raw strings left by ``model_copy`` updates.
+
+        ``model_copy(update=...)`` bypasses validators, so a description-only
+        string can end up stored directly in the tuple. Serialize such strings
+        as-is (matching the description-only spec form) so serialization stays
+        robust and round-trips byte-identically.
+        """
+        serialized: list[str | dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, AcceptanceCriterionSpec):
+                serialized.append(item.model_dump(mode="json"))
+            else:
+                serialized.append(item)
+        return serialized
+
+    @field_validator("acceptance_criteria", mode="before")
+    @classmethod
+    def _coerce_string_acceptance_criteria(cls, value: Any) -> Any:
+        """Coerce bare-string ACs into description-only specs.
+
+        A legacy seed stores acceptance criteria as plain strings; lifting each
+        into ``{"description": <str>}`` keeps those files valid forever while
+        letting authored contracts supply the richer spec shape directly.
+        """
+        if isinstance(value, list | tuple):
+            return tuple({"description": item} if isinstance(item, str) else item for item in value)
+        return value
 
     @field_validator("evaluation_principles", mode="before")
     @classmethod

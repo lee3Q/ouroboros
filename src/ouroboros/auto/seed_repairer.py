@@ -14,7 +14,7 @@ from uuid import uuid4
 from ouroboros.auto.grading import VAGUE_TERMS, SeedGrade
 from ouroboros.auto.ledger import LedgerEntry, LedgerSource, LedgerStatus, SeedDraftLedger
 from ouroboros.auto.seed_reviewer import ReviewFinding, SeedReview, SeedReviewer
-from ouroboros.core.seed import Seed
+from ouroboros.core.seed import AcceptanceCriterionSpec, Seed, ac_text
 
 
 def _review_accepts_closure_mode(review_callable: Callable[..., Any]) -> bool:
@@ -128,7 +128,7 @@ class SeedRepairer:
             )
 
         constraints = list(seed.constraints)
-        acceptance = list(seed.acceptance_criteria)
+        acceptance: list[AcceptanceCriterionSpec] = list(seed.acceptance_criteria)
         goal = seed.goal
         applied: list[str] = []
         unresolved: list[ReviewFinding] = []
@@ -147,18 +147,26 @@ class SeedRepairer:
                 index = _target_index(finding.target)
                 if index is not None and index < len(acceptance):
                     if index not in repaired_acceptance_indices:
-                        acceptance[index] = _observable_preserving_replacement(
-                            acceptance[index], index=index
+                        acceptance[index] = acceptance[index].model_copy(
+                            update={
+                                "description": _observable_preserving_replacement(
+                                    ac_text(acceptance[index]), index=index
+                                )
+                            }
                         )
                         repaired_acceptance_indices.add(index)
                 else:
                     acceptance.append(
-                        "A command/API check returns stable observable output or artifacts proving the task goal."
+                        AcceptanceCriterionSpec(
+                            description="A command/API check returns stable observable output or artifacts proving the task goal."
+                        )
                     )
                 applied.append(finding.fingerprint)
             elif finding.code == "missing_acceptance_criteria":
                 acceptance.append(
-                    "A command/API check returns stable observable output or artifacts proving the task goal."
+                    AcceptanceCriterionSpec(
+                        description="A command/API check returns stable observable output or artifacts proving the task goal."
+                    )
                 )
                 applied.append(finding.fingerprint)
             elif finding.code == "missing_constraints":

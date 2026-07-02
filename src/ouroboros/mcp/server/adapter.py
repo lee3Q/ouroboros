@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from ouroboros.config._model_defaults import DEFAULT_SONNET_MODEL
+from ouroboros.core.seed import ac_text
 from ouroboros.core.types import Result
 from ouroboros.events.io import new_call_id
 from ouroboros.events.io_recorder import IOJournalRecorder, use_io_journal_recorder
@@ -292,7 +293,7 @@ def _parse_legacy_execution_task_summary(artifact: str, seed: Any) -> Any | None
     if not task_line_matches:
         return None
 
-    seed_acs = getattr(seed, "acceptance_criteria", None) or ()
+    seed_acs = tuple(ac_text(ac) for ac in (getattr(seed, "acceptance_criteria", None) or ()))
     feedback_metadata = _extract_feedback_metadata_from_artifact(artifact)
 
     task_results: list[TaskResult] = []
@@ -1553,7 +1554,7 @@ def create_ouroboros_server(
         if not project_dir:
             return None
 
-        seed_acs = getattr(seed, "acceptance_criteria", None) or ()
+        seed_acs = tuple(ac_text(ac) for ac in (getattr(seed, "acceptance_criteria", None) or ()))
         if not seed_acs:
             return None
 
@@ -1613,7 +1614,7 @@ def create_ouroboros_server(
         # Fallback: LLM-based evaluation when no structured AC results
         acs = getattr(seed, "acceptance_criteria", None)
         if acs:
-            current_ac = "\n".join(f"AC {i + 1}: {ac}" for i, ac in enumerate(acs))
+            current_ac = "\n".join(f"AC {i + 1}: {ac_text(ac)}" for i, ac in enumerate(acs))
         else:
             current_ac = "Verify execution output meets requirements"
 

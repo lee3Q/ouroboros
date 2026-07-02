@@ -19,8 +19,35 @@ Example: "Python >= 3.12 | No external database | Must work offline"
 
 ### 3. ACCEPTANCE_CRITERIA
 Specific, measurable criteria for success.
-Format: pipe-separated list
-Example: "Tasks can be created | Tasks can be listed | Tasks persist to file"
+
+Emit **one `AC:` line per criterion** using the success-contract format so the
+runner can verify each outcome by evidence instead of trusting a self-report:
+
+```
+AC: <description> | verify: <command or NONE> | artifacts: <comma-list or NONE> | expect: <assertion or NONE>
+```
+
+- `verify`: a shell command the runner executes itself; exit code 0 is required
+  to accept the AC. Use `NONE` when no runnable check exists.
+- `artifacts`: comma-separated workspace-relative paths the AC must produce, or
+  `NONE`.
+- `expect`: a substring that must appear in the command's combined stdout+stderr
+  for the gate to pass, or `NONE`.
+
+Every field except the description is optional; a missing/`NONE` field simply
+means "no contract for this dimension". A bare description with no pipes is
+always valid.
+
+**Few-shot examples:**
+
+```
+AC: Users can create a task via the CLI | verify: pytest tests/test_tasks.py -q | artifacts: NONE | expect: passed
+AC: README documents the install steps | verify: NONE | artifacts: README.md | expect: NONE
+```
+
+A legacy single `ACCEPTANCE_CRITERIA: <c1> | <c2> | ...` pipe list is still
+accepted (each entry becomes a description-only criterion), but prefer the
+per-line `AC:` contract format.
 
 **Granularity contract (read carefully):**
 - Produce **3-7** acceptance criteria. Each criterion is **one independently valuable, user-visible outcome** — not an implementation step.
@@ -58,7 +85,8 @@ Provide your analysis in this exact structure:
 ```
 GOAL: <clear goal statement>
 CONSTRAINTS: <constraint 1> | <constraint 2> | ...
-ACCEPTANCE_CRITERIA: <criterion 1> | <criterion 2> | ...
+AC: <description> | verify: <command or NONE> | artifacts: <comma-list or NONE> | expect: <assertion or NONE>
+AC: <description> | verify: <command or NONE> | artifacts: <comma-list or NONE> | expect: <assertion or NONE>
 ONTOLOGY_NAME: <name>
 ONTOLOGY_DESCRIPTION: <description>
 ONTOLOGY_FIELDS: <name>:<type>:<description> | ...

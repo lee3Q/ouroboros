@@ -19,7 +19,7 @@ import yaml
 from ouroboros.config import get_llm_backend_for_role, get_llm_model_for_role
 from ouroboros.core.errors import ValidationError
 from ouroboros.core.project_paths import resolve_path_against_base, resolve_seed_project_path
-from ouroboros.core.seed import Seed
+from ouroboros.core.seed import Seed, ac_text
 from ouroboros.core.types import Result
 from ouroboros.mcp.errors import MCPServerError, MCPToolError
 from ouroboros.mcp.job_manager import JobLinks, JobManager
@@ -1220,7 +1220,7 @@ class ChecklistVerifyHandler:
             )
 
         acceptance_criteria = tuple(
-            text.strip() for text in seed.acceptance_criteria if text and text.strip()
+            stripped for ac in seed.acceptance_criteria if (stripped := ac_text(ac).strip())
         )
         if not acceptance_criteria:
             return Result.err(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from ouroboros.core.seed import Seed
+from ouroboros.core.seed import Seed, ac_text
 
 _AUTO_WRAPPER_CRITERIA = frozenset(
     {
@@ -174,7 +174,9 @@ def normalize_execution_acceptance(seed: Seed) -> Seed:
     product requirements, only normalize the known hello_auto observation
     context.
     """
-    criteria = tuple(ac for ac in seed.acceptance_criteria if ac and ac.strip())
+    criteria = tuple(
+        text for ac in seed.acceptance_criteria if (text := ac_text(ac)) and text.strip()
+    )
     direction_context = "\n".join((seed.goal, *seed.constraints))
     if not criteria:
         return seed

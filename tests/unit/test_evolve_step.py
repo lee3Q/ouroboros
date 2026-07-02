@@ -26,6 +26,7 @@ from ouroboros.core.seed import (
     OntologySchema,
     Seed,
     SeedMetadata,
+    ac_text,
 )
 from ouroboros.core.types import Result
 from ouroboros.core.worktree import WorktreeError
@@ -1098,7 +1099,7 @@ class TestRunGenerationFailures:
                 ReflectOutput(
                     refined_goal=seed_v1.goal,
                     refined_constraints=seed_v1.constraints,
-                    refined_acs=seed_v1.acceptance_criteria,
+                    refined_acs=tuple(ac_text(ac) for ac in seed_v1.acceptance_criteria),
                     ontology_mutations=(),
                     reasoning="test",
                 )
@@ -1183,7 +1184,7 @@ class TestRunGenerationFailures:
                 ReflectOutput(
                     refined_goal=seed_v1.goal,
                     refined_constraints=seed_v1.constraints,
-                    refined_acs=seed_v1.acceptance_criteria,
+                    refined_acs=tuple(ac_text(ac) for ac in seed_v1.acceptance_criteria),
                     ontology_mutations=(),
                     reasoning="test",
                 )

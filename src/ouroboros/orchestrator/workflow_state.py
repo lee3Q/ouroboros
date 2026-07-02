@@ -18,13 +18,14 @@ Usage:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 import re
 from typing import TYPE_CHECKING, Any
 
+from ouroboros.core.seed import AcceptanceCriterionSpec, ac_text
 from ouroboros.mcp.types import MCPToolResult
 from ouroboros.orchestrator.mcp_tools import serialize_tool_result
 from ouroboros.orchestrator.runtime_message_projection import project_runtime_message
@@ -333,6 +334,10 @@ class AcceptanceCriterion:
     Attributes:
         index: 1-based index of the AC.
         content: The AC description text.
+        spec: The originating acceptance-criterion spec, when this AC was built
+            from a Seed. Carries the optional success contract (verify command,
+            expected artifacts, output assertion) so the orchestrator can gate
+            completion on evidence instead of a self-report.
         status: Current status.
         retry_attempt: Number of reopen retries for this AC (0 on first attempt).
         started_at: When work started on this AC.
@@ -341,6 +346,7 @@ class AcceptanceCriterion:
 
     index: int
     content: str
+    spec: AcceptanceCriterionSpec | None = None
     status: ACStatus = ACStatus.PENDING
     retry_attempt: int = 0
     started_at: datetime | None = None
@@ -612,7 +618,7 @@ class WorkflowStateTracker:
 
     def __init__(
         self,
-        acceptance_criteria: list[str],
+        acceptance_criteria: Sequence[AcceptanceCriterionSpec | str],
         goal: str = "",
         session_id: str = "",
         activity_map: dict[str, ActivityType] | None = None,
@@ -620,7 +626,9 @@ class WorkflowStateTracker:
         """Initialize tracker with acceptance criteria.
 
         Args:
-            acceptance_criteria: List of AC descriptions.
+            acceptance_criteria: Acceptance criteria as bare descriptions or
+                :class:`AcceptanceCriterionSpec` instances. Specs preserve their
+                success contract on the resulting :class:`AcceptanceCriterion`.
             goal: The workflow goal.
             session_id: Session identifier.
             activity_map: Optional tool-to-activity mapping override.
@@ -631,7 +639,11 @@ class WorkflowStateTracker:
             session_id=session_id,
             goal=goal,
             acceptance_criteria=[
-                AcceptanceCriterion(index=i + 1, content=ac)
+                AcceptanceCriterion(
+                    index=i + 1,
+                    content=ac_text(ac),
+                    spec=ac if isinstance(ac, AcceptanceCriterionSpec) else None,
+                )
                 for i, ac in enumerate(acceptance_criteria)
             ],
         )

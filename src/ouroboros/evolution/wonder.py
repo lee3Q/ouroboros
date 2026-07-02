@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from ouroboros.config import get_llm_backend_for_role, get_llm_model_for_role
 from ouroboros.core.errors import ProviderError
 from ouroboros.core.lineage import EvaluationSummary, OntologyLineage
-from ouroboros.core.seed import OntologySchema, Seed
+from ouroboros.core.seed import OntologySchema, Seed, ac_text
 from ouroboros.core.text import truncate_head_tail
 from ouroboros.core.types import Result
 from ouroboros.evolution.regression import RegressionDetector
@@ -257,7 +257,7 @@ Focus on ONTOLOGICAL questions (what IS the thing?) not implementation questions
             if seed.acceptance_criteria:
                 parts.append(f"Acceptance Criteria: {len(seed.acceptance_criteria)}")
                 for i, ac in enumerate(seed.acceptance_criteria, 1):
-                    parts.append(f"  AC {i}: {ac}")
+                    parts.append(f"  AC {i}: {ac_text(ac)}")
             parts.append("")
 
         parts.append(f"## Current Ontology: {ontology.name}")

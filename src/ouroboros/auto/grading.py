@@ -9,7 +9,7 @@ from typing import Any
 
 from ouroboros.auto.gap_detector import GapDetector
 from ouroboros.auto.ledger import REQUIRED_SECTIONS, LedgerSource, LedgerStatus, SeedDraftLedger
-from ouroboros.core.seed import Seed
+from ouroboros.core.seed import Seed, ac_text
 
 
 class SeedGrade(StrEnum):
@@ -241,7 +241,8 @@ class GradeGate:
                     "Add observable acceptance criteria.",
                 )
             )
-        for index, criterion in enumerate(seed.acceptance_criteria):
+        for index, criterion_spec in enumerate(seed.acceptance_criteria):
+            criterion = ac_text(criterion_spec)
             if _is_vague(criterion):
                 findings.append(
                     GradeFinding(
