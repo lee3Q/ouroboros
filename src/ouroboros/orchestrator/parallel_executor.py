@@ -1785,6 +1785,21 @@ HEARTBEAT_INTERVAL_SECONDS: float = 30.0  # Heartbeat emission interval
 MAX_STALL_RETRIES: int = 2  # Max retries after stall (3 total attempts)
 _STALL_SENTINEL = "__STALL_DETECTED__"  # Sentinel error for stall results
 
+
+def _safe_backend_outcome_weights() -> dict[str, float]:
+    """Per-backend outcome weights for the picker tie-break (PR-X X4), never raising.
+
+    The flywheel is a read-only SQLite scan; any failure collapses to no weights
+    so a failed AC's cross-harness redispatch is never blocked by it.
+    """
+    try:
+        from ouroboros.orchestrator.backend_outcomes import outcome_weights
+
+        return outcome_weights()
+    except Exception:
+        return {}
+
+
 # Memory-pressure gate constants
 _MIN_FREE_MEMORY_GB = 2.0
 _MEMORY_CHECK_INTERVAL_SECONDS = 5.0
@@ -2433,6 +2448,7 @@ class ParallelACExecutor:
         fat_harness_mode: bool = False,
         atomic_verifier: Verifier | None = None,
         reasoning_effort: str | None = None,
+        cross_harness_redispatch: bool | None = None,
     ):
         """Initialize executor.
 
@@ -2483,6 +2499,18 @@ class ParallelACExecutor:
         # Param degradations already surfaced this run, keyed by (param, support),
         # so the operator is told once rather than on every dispatch.
         self._announced_param_degradations: set[tuple[str, str]] = set()
+        # Cross-harness recovery (PR-X X1): when a terminally failing AC is
+        # eligible, redispatch it once onto a different installed runtime before
+        # marking it FAILED. ``None`` reads the config flag; the throwaway
+        # alternate-runtime executor passes ``False`` as a recursion guard.
+        if cross_harness_redispatch is None:
+            from ouroboros.config import get_cross_harness_redispatch_enabled
+
+            self._cross_harness_redispatch_enabled = get_cross_harness_redispatch_enabled()
+        else:
+            self._cross_harness_redispatch_enabled = cross_harness_redispatch
+        # AC identities that have already consumed their one alt-harness redispatch.
+        self._alt_harness_redispatched_acs: set[str] = set()
 
     @staticmethod
     def _build_dispatch_rate_gate(adapter: AgentRuntime) -> RateLimitGate:
@@ -4571,6 +4599,27 @@ class ParallelACExecutor:
         # decomposition/dispatch branch above.
         atomic_retry_attempt = retry_attempt
         max_attempts = retry_attempt + MAX_STALL_RETRIES + 1
+        # Stable re-run bundle for a possible cross-harness redispatch (PR-X X1):
+        # every param except retry_attempt is fixed across the atomic loop, so it
+        # can be replayed verbatim on an alternative runtime.
+        alt_rerun_kwargs: dict[str, Any] = {
+            "ac_index": ac_index,
+            "ac_content": ac_content,
+            "session_id": session_id,
+            "tools": tools,
+            "tool_catalog": tool_catalog,
+            "system_prompt": system_prompt,
+            "seed_goal": seed_goal,
+            "depth": depth,
+            "execution_id": execution_id,
+            "level_contexts": level_contexts,
+            "sibling_acs": sibling_acs,
+            "execution_counters": execution_counters,
+            "is_sub_ac": is_sub_ac,
+            "parent_ac_index": parent_ac_index,
+            "sub_ac_index": sub_ac_index,
+            "node_identity": node_identity,
+        }
         while True:
             atomic_result = await self._execute_atomic_ac(
                 ac_index=ac_index,
@@ -4593,6 +4642,18 @@ class ParallelACExecutor:
                 node_identity=node_identity,
             )
             if atomic_result.error != _STALL_SENTINEL:
+                if not atomic_result.success:
+                    # Non-stall terminal failure (e.g. fabrication, exhausted
+                    # transient 429/529): try one cross-harness redispatch.
+                    alt_result = await self._maybe_redispatch_alt_harness(
+                        result=atomic_result,
+                        execution_context_id=execution_context_id,
+                        rerun_kwargs=alt_rerun_kwargs,
+                        atomic_retry_attempt=atomic_retry_attempt,
+                        stall_retries_exhausted=False,
+                    )
+                    if alt_result is not None:
+                        atomic_result = alt_result
                 if decomposition_depth_warning:
                     return replace(atomic_result, decomposition_depth_warning=True)
                 return atomic_result
@@ -4632,11 +4693,164 @@ class ParallelACExecutor:
                     atomic_result,
                     error=f"Stalled (no activity for {STALL_TIMEOUT_SECONDS:.0f}s)",
                 )
+                # Same-runtime stall retries are spent; try one cross-harness
+                # redispatch before this AC is finally marked FAILED.
+                alt_result = await self._maybe_redispatch_alt_harness(
+                    result=failed_result,
+                    execution_context_id=execution_context_id,
+                    rerun_kwargs=alt_rerun_kwargs,
+                    atomic_retry_attempt=atomic_retry_attempt,
+                    stall_retries_exhausted=True,
+                )
+                if alt_result is not None:
+                    failed_result = alt_result
                 if decomposition_depth_warning:
                     return replace(failed_result, decomposition_depth_warning=True)
                 return failed_result
 
             atomic_retry_attempt += 1
+
+    async def _maybe_redispatch_alt_harness(
+        self,
+        *,
+        result: ACExecutionResult,
+        execution_context_id: str,
+        rerun_kwargs: dict[str, Any],
+        atomic_retry_attempt: int,
+        stall_retries_exhausted: bool,
+    ) -> ACExecutionResult | None:
+        """Cross-harness recovery hook (PR-X X1) — narrow shell over the module.
+
+        Consults :func:`decide_alt_harness_redispatch`; on a positive decision,
+        re-runs the SAME AC once on a different runtime (fresh worker session),
+        capped at one alt-harness redispatch per AC. Returns the alternative's
+        result only when it succeeds; any negative decision or error returns
+        ``None`` so the original failure path is untouched.
+        """
+        if not self._cross_harness_redispatch_enabled:
+            return None
+
+        from ouroboros.orchestrator.cross_harness_redispatch import (
+            decide_alt_harness_redispatch,
+            looks_transient_exhausted,
+        )
+        from ouroboros.orchestrator.failure_taxonomy import FailureClass
+
+        from_backend = getattr(self._adapter, "runtime_backend", None)
+        runtime_identity = build_ac_runtime_identity(
+            rerun_kwargs["ac_index"],
+            execution_context_id=execution_context_id,
+            is_sub_ac=rerun_kwargs["is_sub_ac"],
+            parent_ac_index=rerun_kwargs["parent_ac_index"],
+            sub_ac_index=rerun_kwargs["sub_ac_index"],
+            node_identity=rerun_kwargs["node_identity"],
+            retry_attempt=atomic_retry_attempt,
+        )
+        ac_key = runtime_identity.ac_id or f"{execution_context_id}:{rerun_kwargs['ac_index']}"
+
+        failure: FailureClass | None = None
+        verdict = result.atomic_verifier_verdict
+        if verdict is not None and verdict.failure_class:
+            try:
+                failure = FailureClass(verdict.failure_class)
+            except ValueError:
+                failure = None
+        # The stall-abandon site carries no verifier verdict, but the condition
+        # itself is a STALL — name it so the policy can route it.
+        if failure is None and stall_retries_exhausted:
+            failure = FailureClass.STALL
+
+        decision = decide_alt_harness_redispatch(
+            enabled=True,
+            from_backend=from_backend,
+            failure=failure,
+            already_redispatched=ac_key in self._alt_harness_redispatched_acs,
+            stall_retries_exhausted=stall_retries_exhausted,
+            transient_exhausted=looks_transient_exhausted(result.error),
+            exclude={from_backend} if from_backend else None,
+            weights=_safe_backend_outcome_weights(),
+        )
+        if not decision.should_redispatch or decision.to_backend is None:
+            return None
+
+        # Consume the one-per-AC cap up front so a re-run that itself fails does
+        # not trigger a second harness hop.
+        self._alt_harness_redispatched_acs.add(ac_key)
+        try:
+            alt_result = await self._run_single_ac_on_backend(
+                decision.to_backend,
+                rerun_kwargs=rerun_kwargs,
+                retry_attempt=atomic_retry_attempt + 1,
+                decision=decision,
+                runtime_identity=runtime_identity,
+                failure_class=failure.value if failure is not None else None,
+            )
+        except Exception as exc:  # never make a failure worse
+            log.warning(
+                "parallel_executor.alt_harness_redispatch_failed",
+                to_backend=decision.to_backend,
+                ac_index=rerun_kwargs["ac_index"],
+                error=str(exc),
+            )
+            return None
+        return alt_result if alt_result is not None and alt_result.success else None
+
+    async def _run_single_ac_on_backend(
+        self,
+        backend: str,
+        *,
+        rerun_kwargs: dict[str, Any],
+        retry_attempt: int,
+        decision: Any,
+        runtime_identity: ACRuntimeIdentity,
+        failure_class: str | None,
+    ) -> ACExecutionResult | None:
+        """Build a throwaway runtime for ``backend`` and replay one AC on it.
+
+        Emits the observable from→to redispatch event, then runs the AC through a
+        fresh, decomposition-disabled executor whose own cross-harness redispatch
+        is turned off (recursion guard).
+        """
+        from ouroboros.orchestrator.cross_harness_redispatch import (
+            create_alt_harness_redispatch_event,
+        )
+        from ouroboros.orchestrator.runtime_factory import create_agent_runtime
+
+        cwd = self._task_cwd or self._adapter.working_directory
+        alt_adapter = create_agent_runtime(backend=backend, cwd=cwd)
+
+        event = create_alt_harness_redispatch_event(
+            session_id=rerun_kwargs["session_id"],
+            ac_index=rerun_kwargs["ac_index"],
+            ac_id=runtime_identity.ac_id,
+            execution_id=rerun_kwargs["execution_id"] or None,
+            decision=decision,
+            redispatch_index=1,
+            failure_class=failure_class,
+        )
+        await self._safe_emit_event(event)
+        log.info(
+            "parallel_executor.alt_harness_redispatch",
+            from_backend=decision.from_backend,
+            to_backend=backend,
+            ac_index=rerun_kwargs["ac_index"],
+        )
+
+        alt_executor = ParallelACExecutor(
+            alt_adapter,
+            self._event_store,
+            console=self._console,
+            enable_decomposition=False,
+            max_concurrent=1,
+            checkpoint_store=self._checkpoint_store,
+            task_cwd=self._task_cwd,
+            execution_profile=self._execution_profile,
+            fat_harness_mode=self._fat_harness_mode,
+            atomic_verifier=self._atomic_verifier,
+            reasoning_effort=self._reasoning_effort,
+            cross_harness_redispatch=False,
+        )
+        return await alt_executor._execute_single_ac(**rerun_kwargs, retry_attempt=retry_attempt)
 
     async def _try_decompose_ac(
         self,

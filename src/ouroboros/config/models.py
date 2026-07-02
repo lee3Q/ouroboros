@@ -201,11 +201,19 @@ class ExecutionConfig(BaseModel, frozen=True):
         max_iterations_per_ac: Maximum iterations per acceptance criteria
         retrospective_interval: Iterations between retrospectives
         tui_autolaunch: Whether `ooo run` should open the TUI without prompting
+        cross_harness_redispatch: Whether a terminally failing AC may be
+            re-dispatched once onto a different (installed, capable) runtime
+            backend before being marked FAILED (PR-X cross-harness recovery).
+        n_version_tournament: Whether an AC that has already exhausted its
+            alt-harness redispatch may fan out to multiple runtimes in parallel,
+            first-passing-verification wins (PR-X N-version tournament, opt-in).
     """
 
     max_iterations_per_ac: int = Field(default=10, ge=1)
     retrospective_interval: int = Field(default=3, ge=1)
     tui_autolaunch: bool = False
+    cross_harness_redispatch: bool = True
+    n_version_tournament: bool = False
 
 
 class ResilienceConfig(BaseModel, frozen=True):
