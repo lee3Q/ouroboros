@@ -201,9 +201,10 @@ class ExecutionConfig(BaseModel, frozen=True):
         max_iterations_per_ac: Maximum iterations per acceptance criteria
         retrospective_interval: Iterations between retrospectives
         tui_autolaunch: Whether `ooo run` should open the TUI without prompting
-        run_verify_commands: Whether the orchestrator runs an AC's
-            ``verify_command`` itself and requires exit code 0 (plus any
-            ``output_assertion``) before accepting the AC. On by default.
+        run_verify_commands: Whether the orchestrator checks an AC's success
+            contract itself before accepting the AC: all ``expected_artifacts``
+            must exist under the run workspace and ``verify_command`` must exit
+            0 (plus any ``output_assertion``). On by default.
         verify_command_timeout_seconds: Timeout for an AC verify command.
         ac_retry_attempts: How many times a failed AC is re-dispatched before
             it is marked FAILED (per-AC, excludes stall retries).
