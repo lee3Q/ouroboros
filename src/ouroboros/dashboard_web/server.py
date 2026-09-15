@@ -23,10 +23,12 @@ from ouroboros.dashboard_web.kanban import reduce_board
 from ouroboros.dashboard_web.page import INDEX_HTML, static_html
 from ouroboros.dashboard_web.reader import (
     EventTail,
+    InterviewTail,
     PickerIndexContractError,
     list_recent_executions,
     list_recent_interviews,
 )
+from ouroboros.persistence.picker_indexes import RUNTIME_STATUS_ASCII_WHITESPACE
 
 # SSE poll cadence. Fast enough to feel live, slow enough that tailing a shared
 # multi-hundred-MB SQLite file stays negligible.
@@ -34,6 +36,21 @@ _POLL_INTERVAL_SEC = 0.7
 # Heartbeat comment cadence so idle connections stay open through proxies/tunnels.
 _HEARTBEAT_SEC = 15.0
 _PICKER_CONTRACT_ERROR = "picker_index_contract_unavailable"
+
+
+def _selected_aggregate(query: dict[str, list[str]]) -> tuple[str, str] | None:
+    """Return one unambiguous run or Interview query selection."""
+    runs = query.get("run", [])
+    interviews = query.get("interview", [])
+    if (len(runs), len(interviews)) not in {(1, 0), (0, 1)}:
+        return None
+    run_id = runs[0] if runs else ""
+    interview_id = interviews[0] if interviews else ""
+    if not run_id.strip(RUNTIME_STATUS_ASCII_WHITESPACE) and not interview_id.strip(
+        RUNTIME_STATUS_ASCII_WHITESPACE
+    ):
+        return None
+    return run_id, interview_id
 
 
 class _DashboardServer(ThreadingHTTPServer):
@@ -79,7 +96,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 (http.server API)
         parsed = urlparse(self.path)
         path = parsed.path
-        query = parse_qs(parsed.query)
+        query = parse_qs(parsed.query, keep_blank_values=True)
         if path in ("/", "/index.html"):
             self._send_bytes(INDEX_HTML.encode("utf-8"), "text/html; charset=utf-8")
         elif path == "/healthz":
@@ -110,27 +127,39 @@ class _Handler(BaseHTTPRequestHandler):
             # of holding an SSE stream. Refresh only after a successful response.
             self.server.touch()
         elif path == "/snapshot":
-            self._send_snapshot((query.get("run") or [""])[0])
+            selected = _selected_aggregate(query)
+            if selected is None:
+                self.send_error(400, "provide exactly one unambiguous run or Interview selector")
+                return
+            self._send_snapshot(*selected)
         elif path == "/events":
-            run = (query.get("run") or [""])[0]
-            self._stream_events(run)
+            selected = _selected_aggregate(query)
+            if selected is None:
+                self.send_error(400, "provide exactly one unambiguous run or Interview selector")
+                return
+            self._stream_events(*selected)
         else:
             self.send_error(404)
 
-    def _send_snapshot(self, run_id: str) -> None:
-        """Serve a frozen, SSE-free HTML snapshot of one run (shareable / capturable)."""
-        if not run_id:
-            self.send_error(400, "missing ?run=<execution_id>")
+    def _send_snapshot(self, run_id: str, interview_id: str) -> None:
+        """Serve a frozen, SSE-free snapshot of one selected aggregate."""
+        if bool(run_id) == bool(interview_id):
+            self.send_error(400, "provide exactly one of ?run=<execution_id> or ?interview=<id>")
             return
-        tail = EventTail(self.server.db_path, run_id)
+        tail = (
+            EventTail(self.server.db_path, run_id)
+            if run_id
+            else InterviewTail(self.server.db_path, interview_id)
+        )
         try:
             events = tail.fetch_new(limit=100000)
         except PickerIndexContractError:
             self._send_json({"error": _PICKER_CONTRACT_ERROR}, status=503)
             return
-        board = reduce_board(events, execution_id=run_id)
+        board = reduce_board(events, execution_id=run_id or None)
         self._send_bytes(
-            static_html(board, run_id=run_id).encode("utf-8"), "text/html; charset=utf-8"
+            static_html(board, run_id=run_id or interview_id).encode("utf-8"),
+            "text/html; charset=utf-8",
         )
 
     def _send_bytes(self, body: bytes, content_type: str, *, status: int = 200) -> None:
@@ -147,11 +176,15 @@ class _Handler(BaseHTTPRequestHandler):
             status=status,
         )
 
-    def _stream_events(self, run_id: str) -> None:
-        if not run_id:
-            self.send_error(400, "missing ?run=<execution_id>")
+    def _stream_events(self, run_id: str, interview_id: str) -> None:
+        if bool(run_id) == bool(interview_id):
+            self.send_error(400, "provide exactly one of ?run=<execution_id> or ?interview=<id>")
             return
-        tail = EventTail(self.server.db_path, run_id)
+        tail = (
+            EventTail(self.server.db_path, run_id)
+            if run_id
+            else InterviewTail(self.server.db_path, interview_id)
+        )
         try:
             first_batch = tail.fetch_new()
         except PickerIndexContractError:
@@ -181,7 +214,7 @@ class _Handler(BaseHTTPRequestHandler):
                 now = time.monotonic()
                 if new:
                     accumulated.extend(new)
-                    board = reduce_board(accumulated, execution_id=run_id)
+                    board = reduce_board(accumulated, execution_id=run_id or None)
                     payload = json.dumps(board, default=str)
                     if payload != last_payload:
                         self._sse_send(payload)

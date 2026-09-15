@@ -276,6 +276,25 @@ function renderRuns(runs) {
     : '<div class="list-empty">waiting for run… (ooo run / ooo auto)</div>');
 }
 
+function interviewRowHtml(interview) {
+  const id = interview && interview.interview_id ? interview.interview_id : "";
+  return `<a class="run-row status-running" href="?interview=${encodeURIComponent(id)}">
+    <div class="run-goal">Interview</div>
+    <div class="run-details"><span class="run-status running">available</span>
+      <span class="run-id">${esc(id)}</span></div>
+  </a>`;
+}
+
+function renderInterviews(interviews) {
+  const list = document.getElementById("run-list");
+  const rows = Array.isArray(interviews) ? interviews : [];
+  const section = `<div class="list-head"><h2>Recent interviews</h2></div>`
+    + (rows.length
+      ? `<div class="runs">${rows.map(interviewRowHtml).join("")}</div>`
+      : '<div class="list-empty">waiting for interview… (ooo interview)</div>');
+  list.insertAdjacentHTML("afterbegin", section);
+}
+
 function renderPickerUnavailable() {
   const list = document.getElementById("run-list");
   list.innerHTML = `<div class="list-head"><h2>Recent runs</h2></div>
@@ -309,13 +328,16 @@ __BOOTSTRAP__
 _LIVE_BOOTSTRAP = """
 const WAIT_POLL_MS = 3000;
 let runListRequest = 0;
-function connect(runId) {
-  setView(true, runId);
+function connect(runId, interviewId) {
+  const selectedId = runId || interviewId;
+  setView(true, selectedId);
   if (window.dashboardSource) window.dashboardSource.close();
-  const src = new EventSource("/events?run=" + encodeURIComponent(runId));
+  const url = runId ? "/events?run=" + encodeURIComponent(runId)
+    : "/events?interview=" + encodeURIComponent(interviewId);
+  const src = new EventSource(url);
   window.dashboardSource = src;
   const st = document.getElementById("m-status");
-  src.onopen = () => st.innerHTML = '<span class="dot" style="background:var(--completed)"></span><span class="live">live</span> · ' + esc(runId);
+  src.onopen = () => st.innerHTML = '<span class="dot" style="background:var(--completed)"></span><span class="live">live</span> · ' + esc(selectedId);
   src.onmessage = (e) => { try { render(JSON.parse(e.data)); } catch (_) {} };
   src.onerror = () => st.innerHTML = '<span class="dot" style="background:var(--failed)"></span>reconnecting…';
 }
@@ -330,24 +352,38 @@ async function fetchRuns() {
   } catch (_) {}
   return {state:"network-error", runs:[]};
 }
+async function fetchInterviews() {
+  try {
+    const response = await fetch("/api/interviews", {cache:"no-store"});
+    const payload = await response.json();
+    if (!response.ok) return [];
+    return Array.isArray(payload.interviews) ? payload.interviews : [];
+  } catch (_) {}
+  return [];
+}
 async function refreshRunList() {
   const request = ++runListRequest;
-  const result = await fetchRuns();
+  const [result, interviews] = await Promise.all([fetchRuns(), fetchInterviews()]);
   if (request !== runListRequest) return;
   if (result.state === "picker-unavailable") renderPickerUnavailable();
-  else if (result.state === "ready") renderRuns(result.runs);
+  else if (result.state === "ready") {
+    renderRuns(result.runs);
+    renderInterviews(interviews);
+  }
   else renderRunListError();
 }
 async function startList() {
   setView(false);
-  while (!new URLSearchParams(location.search).get("run")) {
+  while (!new URLSearchParams(location.search).get("run")
+      && !new URLSearchParams(location.search).get("interview")) {
     await refreshRunList();
     await new Promise(r => setTimeout(r, WAIT_POLL_MS));
   }
 }
 function start() {
   const runId = new URLSearchParams(location.search).get("run");
-  if (runId) connect(runId);
+  const interviewId = new URLSearchParams(location.search).get("interview");
+  if (runId || interviewId) connect(runId, interviewId);
   else startList();
 }
 start();

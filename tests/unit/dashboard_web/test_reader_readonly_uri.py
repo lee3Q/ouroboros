@@ -15,6 +15,7 @@ from ouroboros.dashboard_web import reader as reader_module
 from ouroboros.dashboard_web.reader import (
     _RELEVANT_EVENT_TYPES,
     EventTail,
+    InterviewTail,
     PickerIndexContractError,
     _connect_readonly,
     list_recent_executions,
@@ -2940,3 +2941,96 @@ async def test_event_tail_rejects_conflicting_start_links_for_one_run(tmp_path) 
     for selected_id in ("exec-conflict", "orch-conflict-a", "orch-conflict-b"):
         with pytest.raises(PickerIndexContractError, match="conflicting interview links"):
             EventTail(db, selected_id).fetch_new()
+
+
+@pytest.mark.asyncio
+async def test_interview_tail_reads_only_picker_linked_real_sqlite_aggregate(tmp_path) -> None:
+    """A picker identity selects one Interview aggregate, never a colliding run."""
+    db = tmp_path / "interview-tail.db"
+    store = EventStore(f"sqlite+aiosqlite:///{db}")
+    await store.initialize()
+    try:
+        await store.append(
+            BaseEvent(
+                type="interview.started",
+                aggregate_type="interview",
+                aggregate_id="interview-c3",
+                data={"initial_context": "selected"},
+            )
+        )
+        await store.append(
+            BaseEvent(
+                type="interview.response.recorded",
+                aggregate_type="interview",
+                aggregate_id="interview-c3",
+                data={"round_number": 2},
+            )
+        )
+        await store.append(
+            BaseEvent(
+                type="interview.started",
+                aggregate_type="interview",
+                aggregate_id="interview-other",
+                data={"initial_context": "must not leak"},
+            )
+        )
+        await _append_linked_run(
+            store,
+            execution_id="interview-c3",
+            session_id="orch-collision",
+            interview_id="interview-other",
+        )
+    finally:
+        await store.close()
+
+    selected = InterviewTail(db, "interview-c3").fetch_new()
+    assert [(event["aggregate_id"], event["event_type"]) for event in selected] == [
+        ("interview-c3", "interview.started"),
+        ("interview-c3", "interview.response.recorded"),
+    ]
+    assert "interview-other" not in {event["aggregate_id"] for event in selected}
+    assert "orch-collision" not in {event["aggregate_id"] for event in selected}
+
+    with pytest.raises(PickerIndexContractError, match="missing or ambiguous Interview root"):
+        InterviewTail(db, "missing-interview").fetch_new()
+
+
+@pytest.mark.asyncio
+async def test_interview_tail_advances_past_unrecognized_event_suffix(tmp_path) -> None:
+    db = tmp_path / "interview-tail-unrecognized.db"
+    store = EventStore(f"sqlite+aiosqlite:///{db}")
+    await store.initialize()
+    try:
+        await store.append(
+            BaseEvent(
+                type="interview.started",
+                aggregate_type="interview",
+                aggregate_id="interview-c3",
+                data={"initial_context": "selected"},
+            )
+        )
+        for ordinal in range(3):
+            await store.append(
+                BaseEvent(
+                    type="interview.future.unsupported",
+                    aggregate_type="interview",
+                    aggregate_id="interview-c3",
+                    data={"ordinal": ordinal},
+                )
+            )
+        await store.append(
+            BaseEvent(
+                type="interview.response.recorded",
+                aggregate_type="interview",
+                aggregate_id="interview-c3",
+                data={"round_number": 4},
+            )
+        )
+    finally:
+        await store.close()
+
+    tail = InterviewTail(db, "interview-c3")
+    assert [event["event_type"] for event in tail.fetch_new(limit=3)] == ["interview.started"]
+    assert [event["event_type"] for event in tail.fetch_new(limit=3)] == [
+        "interview.response.recorded"
+    ]

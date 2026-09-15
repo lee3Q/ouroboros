@@ -370,6 +370,96 @@ async def test_interview_roots_actual_eventstore_http(tmp_path) -> None:
         assert json.loads(body)["error"] == "picker_index_contract_unavailable"
 
 
+async def test_interview_picker_snapshot_and_sse_project_one_real_sqlite_aggregate(
+    tmp_path,
+) -> None:
+    from ouroboros.events.base import BaseEvent
+    from ouroboros.events.interview import interview_response_recorded, interview_started
+    from ouroboros.persistence.event_store import EventStore
+
+    db = tmp_path / "interview-real-path.db"
+    store = EventStore(f"sqlite+aiosqlite:///{db}")
+    await store.initialize()
+    try:
+        await store.append(interview_started("interview-c3", "selected private context"))
+        await store.append(
+            interview_response_recorded("interview-c3", 2, "selected question", "selected response")
+        )
+        await store.append(interview_started("interview-other", "must not leak"))
+        await store.append(
+            interview_response_recorded("interview-other", 9, "other question", "other response")
+        )
+        await store.append(
+            BaseEvent(
+                type="orchestrator.session.started",
+                aggregate_type="session",
+                aggregate_id="orch-collision",
+                data={"execution_id": "interview-c3", "interview_id": "interview-other"},
+            )
+        )
+    finally:
+        await store.close()
+
+    with _running_server(db) as server:
+        host, port = server.server_address
+        snapshot_status, snapshot_headers, snapshot_body = _get(
+            host, port, "/snapshot?interview=interview-c3"
+        )
+        conn = http.client.HTTPConnection(host, port, timeout=2.0)
+        try:
+            conn.request("GET", "/events?interview=interview-c3")
+            response = conn.getresponse()
+            assert response.status == 200
+            streamed = json.loads(response.readline().removeprefix(b"data: "))
+        finally:
+            conn.close()
+
+        assert _get(host, port, "/snapshot?interview=missing-interview")[0] == 503
+        assert _get(host, port, "/events?interview=missing-interview")[0] == 503
+
+    assert snapshot_status == 200
+    assert snapshot_headers["Content-Type"] == "text/html; charset=utf-8"
+    assert "interview-c3" in snapshot_body.decode("utf-8")
+    assert "interview-other" not in snapshot_body.decode("utf-8")
+    assert streamed["meta"]["execution_id"] is None
+    assert streamed["meta"]["interview"] == {
+        "interview_id": "interview-c3",
+        "status": "active",
+        "round": 2,
+        "total_rounds": None,
+        "last_event": "interview.response.recorded",
+    }
+    assert all(not cards for cards in streamed["columns"].values())
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/snapshot",
+        "/events",
+        "/snapshot?run=",
+        "/events?interview=",
+        "/snapshot?run=%20",
+        "/events?interview=%09",
+        "/snapshot?run=exec-a&run=exec-b",
+        "/events?interview=interview-a&interview=interview-b",
+        "/snapshot?run=&run=exec-a",
+        "/events?interview=&interview=interview-a",
+        "/snapshot?run=exec-a&interview=interview-a",
+        "/events?run=exec-a&interview=interview-a",
+        "/snapshot?run=&interview=interview-a",
+        "/events?run=exec-a&interview=",
+    ],
+)
+def test_selected_aggregate_http_routes_reject_ambiguous_selectors(tmp_path, path: str) -> None:
+    db = tmp_path / "ambiguous-selector.db"
+    _make_events_db(db, contract="valid")
+
+    with _running_server(db) as server:
+        host, port = server.server_address
+        assert _get(host, port, path)[0] == 400
+
+
 async def test_unlinked_interview_collision_is_absent_from_snapshot_and_sse(tmp_path) -> None:
     from ouroboros.events.base import BaseEvent
     from ouroboros.events.interview import interview_started

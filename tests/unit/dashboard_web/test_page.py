@@ -76,6 +76,10 @@ class TestLivePage:
         assert 'id="interview-panel" hidden' in INDEX_HTML
         assert "function renderInterview(interview)" in INDEX_HTML
         assert "renderInterview(meta && meta.interview)" in INDEX_HTML
+        assert "function renderInterviews(interviews)" in INDEX_HTML
+        assert "/api/interviews" in INDEX_HTML
+        assert "?interview=" in INDEX_HTML
+        assert '"/events?interview=" + encodeURIComponent(interviewId)' in INDEX_HTML
         assert "interview.last_event" in INDEX_HTML
         assert "interview.error" in INDEX_HTML
         assert 'method:"POST"' not in INDEX_HTML

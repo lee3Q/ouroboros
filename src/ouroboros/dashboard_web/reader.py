@@ -584,6 +584,93 @@ class EventTail:
         return events
 
 
+class InterviewTail:
+    """Cursor-based read-only tail of one picker-registered Interview aggregate."""
+
+    def __init__(self, db_path: str | Path, interview_id: str) -> None:
+        self._db_path = Path(db_path).expanduser()
+        self._interview_id = interview_id
+        self._cursor = 0
+
+    def fetch_new(self, *, limit: int = 5000) -> list[dict[str, Any]]:
+        """Return recognized events for one registered Interview identity."""
+        if not self._db_path.exists():
+            return []
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("Interview event limit must be a positive integer")
+        conn = _connect_readonly(self._db_path)
+        try:
+            conn.execute("BEGIN")
+            missing_contract = frozenset(PICKER_CONTRACT_NAMES) - matching_picker_contract(conn)
+            if missing_contract:
+                raise PickerIndexContractError(missing_contract)
+            if (
+                conn.execute(
+                    "SELECT 1 FROM events "
+                    f"INDEXED BY {PICKER_GAP_INDEX} "
+                    f"WHERE {PICKER_PROJECTION_SCOPE_SQL} "
+                    f"AND picker_projection_version IS NOT {PICKER_PROJECTION_VERSION} LIMIT 1"
+                ).fetchone()
+                is not None
+            ):
+                raise PickerIndexContractError(
+                    frozenset(), detail="contains unprojected relevant events"
+                )
+            if not isinstance(self._interview_id, str) or not self._interview_id.strip(
+                RUNTIME_STATUS_ASCII_WHITESPACE
+            ):
+                raise PickerIndexContractError(frozenset(), detail="invalid Interview identity")
+            pointers = conn.execute(
+                f"SELECT event_rowid FROM {PICKER_INTERVIEW_ROOT_TABLE} "
+                f"INDEXED BY {PICKER_INTERVIEW_ROOT_INDEX} WHERE interview_id = ? LIMIT 2",
+                (self._interview_id,),
+            ).fetchall()
+            if len(pointers) != 1:
+                raise PickerIndexContractError(
+                    frozenset(), detail="missing or ambiguous Interview root identity"
+                )
+            root = conn.execute(
+                "SELECT aggregate_type, aggregate_id, event_type, payload FROM events WHERE rowid = ?",
+                (pointers[0]["event_rowid"],),
+            ).fetchone()
+            if (
+                root is None
+                or root["aggregate_type"] != "interview"
+                or root["aggregate_id"] != self._interview_id
+                or root["event_type"] != "interview.started"
+                or not isinstance(_decode_payload(root["payload"]), dict)
+            ):
+                raise PickerIndexContractError(
+                    frozenset(), detail="Interview root pointer mismatch"
+                )
+            rows = conn.execute(
+                "SELECT rowid, aggregate_id, event_type, payload FROM events "
+                "WHERE rowid > ? AND aggregate_type = 'interview' AND aggregate_id = ? "
+                "ORDER BY rowid LIMIT ?",
+                (self._cursor, self._interview_id, limit),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            self._cursor = max(self._cursor, int(row["rowid"]))
+            if row["event_type"] not in _INTERVIEW_EVENT_TYPES:
+                continue
+            payload = _decode_payload(row["payload"])
+            if not isinstance(payload, dict):
+                continue
+            events.append(
+                {
+                    "rowid": row["rowid"],
+                    "aggregate_id": row["aggregate_id"],
+                    "event_type": row["event_type"],
+                    "payload": payload,
+                }
+            )
+        return events
+
+
 def _fetch_direct_rows(
     conn: sqlite3.Connection,
     ids: list[str],
