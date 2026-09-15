@@ -22,6 +22,11 @@ from ouroboros.bigbang.ambiguity_evidence import (
     EvidenceSource,
     parse_ambiguity_evidence_ledger,
 )
+from ouroboros.bigbang.ambiguity_formula import (
+    CANONICAL_DIMENSIONS,
+    AmbiguityFormulaResult,
+    score_ambiguity_evidence,
+)
 from ouroboros.bigbang.brownfield import (
     BrownfieldEntry,
     generate_desc,
@@ -82,6 +87,10 @@ __all__ = [
     "EvidenceConflict",
     "EvidenceSource",
     "parse_ambiguity_evidence_ledger",
+    # Deterministic ambiguity formula
+    "CANONICAL_DIMENSIONS",
+    "AmbiguityFormulaResult",
+    "score_ambiguity_evidence",
     # Explore
     "CodebaseExploreResult",
     "CodebaseExplorer",

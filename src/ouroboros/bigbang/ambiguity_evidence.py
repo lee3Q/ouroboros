@@ -16,6 +16,7 @@ class AmbiguityEvidenceStatus(StrEnum):
     """How well one requirement field is supported by its cited evidence."""
 
     CONFIRMED = "confirmed"
+    BOUNDED = "bounded"
     MISSING = "missing"
     INFERRED = "inferred"
     CONFLICTING = "conflicting"

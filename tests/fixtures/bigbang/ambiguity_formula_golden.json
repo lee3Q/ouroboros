@@ -1,0 +1,124 @@
+{
+  "cases": [
+    {
+      "name": "all_confirmed",
+      "entries": [
+        {"dimension": "goal", "field": "primary", "status": "confirmed"},
+        {"dimension": "actors_context", "field": "primary", "status": "confirmed"},
+        {"dimension": "scope_non_goals", "field": "primary", "status": "confirmed"},
+        {"dimension": "constraints", "field": "primary", "status": "confirmed"},
+        {"dimension": "success_criteria", "field": "primary", "status": "confirmed"},
+        {"dimension": "inputs_outputs", "field": "primary", "status": "confirmed"},
+        {"dimension": "ownership_decision_authority", "field": "primary", "status": "confirmed"},
+        {"dimension": "verification", "field": "primary", "status": "confirmed"}
+      ],
+      "expected": {
+        "overall_score": 0.0,
+        "dimension_scores": [["goal", 0.0], ["actors_context", 0.0], ["scope_non_goals", 0.0], ["constraints", 0.0], ["success_criteria", 0.0], ["inputs_outputs", 0.0], ["ownership_decision_authority", 0.0], ["verification", 0.0]]
+      }
+    },
+    {
+      "name": "all_bounded",
+      "entries": [
+        {"dimension": "goal", "field": "primary", "status": "bounded"},
+        {"dimension": "actors_context", "field": "primary", "status": "bounded"},
+        {"dimension": "scope_non_goals", "field": "primary", "status": "bounded"},
+        {"dimension": "constraints", "field": "primary", "status": "bounded"},
+        {"dimension": "success_criteria", "field": "primary", "status": "bounded"},
+        {"dimension": "inputs_outputs", "field": "primary", "status": "bounded"},
+        {"dimension": "ownership_decision_authority", "field": "primary", "status": "bounded"},
+        {"dimension": "verification", "field": "primary", "status": "bounded"}
+      ],
+      "expected": {
+        "overall_score": 0.25,
+        "dimension_scores": [["goal", 0.25], ["actors_context", 0.25], ["scope_non_goals", 0.25], ["constraints", 0.25], ["success_criteria", 0.25], ["inputs_outputs", 0.25], ["ownership_decision_authority", 0.25], ["verification", 0.25]]
+      }
+    },
+    {
+      "name": "isolated_inferred_critical_dimension",
+      "entries": [
+        {"dimension": "goal", "field": "primary", "status": "inferred"},
+        {"dimension": "actors_context", "field": "primary", "status": "confirmed"},
+        {"dimension": "scope_non_goals", "field": "primary", "status": "confirmed"},
+        {"dimension": "constraints", "field": "primary", "status": "confirmed"},
+        {"dimension": "success_criteria", "field": "primary", "status": "confirmed"},
+        {"dimension": "inputs_outputs", "field": "primary", "status": "confirmed"},
+        {"dimension": "ownership_decision_authority", "field": "primary", "status": "confirmed"},
+        {"dimension": "verification", "field": "primary", "status": "confirmed"}
+      ],
+      "expected": {
+        "overall_score": 0.48,
+        "dimension_scores": [["goal", 0.6], ["actors_context", 0.0], ["scope_non_goals", 0.0], ["constraints", 0.0], ["success_criteria", 0.0], ["inputs_outputs", 0.0], ["ownership_decision_authority", 0.0], ["verification", 0.0]]
+      }
+    },
+    {
+      "name": "isolated_missing_critical_dimension",
+      "entries": [
+        {"dimension": "goal", "field": "primary", "status": "missing"},
+        {"dimension": "actors_context", "field": "primary", "status": "confirmed"},
+        {"dimension": "scope_non_goals", "field": "primary", "status": "confirmed"},
+        {"dimension": "constraints", "field": "primary", "status": "confirmed"},
+        {"dimension": "success_criteria", "field": "primary", "status": "confirmed"},
+        {"dimension": "inputs_outputs", "field": "primary", "status": "confirmed"},
+        {"dimension": "ownership_decision_authority", "field": "primary", "status": "confirmed"},
+        {"dimension": "verification", "field": "primary", "status": "confirmed"}
+      ],
+      "expected": {
+        "overall_score": 0.8,
+        "dimension_scores": [["goal", 1.0], ["actors_context", 0.0], ["scope_non_goals", 0.0], ["constraints", 0.0], ["success_criteria", 0.0], ["inputs_outputs", 0.0], ["ownership_decision_authority", 0.0], ["verification", 0.0]]
+      }
+    },
+    {
+      "name": "omitted_critical_dimension",
+      "entries": [
+        {"dimension": "goal", "field": "primary", "status": "confirmed"},
+        {"dimension": "actors_context", "field": "primary", "status": "confirmed"},
+        {"dimension": "scope_non_goals", "field": "primary", "status": "confirmed"},
+        {"dimension": "constraints", "field": "primary", "status": "confirmed"},
+        {"dimension": "success_criteria", "field": "primary", "status": "confirmed"},
+        {"dimension": "inputs_outputs", "field": "primary", "status": "confirmed"},
+        {"dimension": "ownership_decision_authority", "field": "primary", "status": "confirmed"}
+      ],
+      "expected": {
+        "overall_score": 0.8,
+        "dimension_scores": [["goal", 0.0], ["actors_context", 0.0], ["scope_non_goals", 0.0], ["constraints", 0.0], ["success_criteria", 0.0], ["inputs_outputs", 0.0], ["ownership_decision_authority", 0.0], ["verification", 1.0]]
+      }
+    },
+    {
+      "name": "conflicting_entry",
+      "entries": [
+        {"dimension": "goal", "field": "primary", "status": "conflicting"},
+        {"dimension": "actors_context", "field": "primary", "status": "confirmed"},
+        {"dimension": "scope_non_goals", "field": "primary", "status": "confirmed"},
+        {"dimension": "constraints", "field": "primary", "status": "confirmed"},
+        {"dimension": "success_criteria", "field": "primary", "status": "confirmed"},
+        {"dimension": "inputs_outputs", "field": "primary", "status": "confirmed"},
+        {"dimension": "ownership_decision_authority", "field": "primary", "status": "confirmed"},
+        {"dimension": "verification", "field": "primary", "status": "confirmed"}
+      ],
+      "expected": {
+        "overall_score": 1.0,
+        "dimension_scores": [["goal", 1.0], ["actors_context", 0.0], ["scope_non_goals", 0.0], ["constraints", 0.0], ["success_criteria", 0.0], ["inputs_outputs", 0.0], ["ownership_decision_authority", 0.0], ["verification", 0.0]]
+      }
+    },
+    {
+      "name": "mixed_multi_field_dimension",
+      "entries": [
+        {"dimension": "goal", "field": "confirmed_field", "status": "confirmed"},
+        {"dimension": "goal", "field": "bounded_field", "status": "bounded"},
+        {"dimension": "goal", "field": "inferred_field", "status": "inferred"},
+        {"dimension": "actors_context", "field": "primary", "status": "confirmed"},
+        {"dimension": "scope_non_goals", "field": "primary", "status": "confirmed"},
+        {"dimension": "constraints", "field": "primary", "status": "confirmed"},
+        {"dimension": "success_criteria", "field": "primary", "status": "confirmed"},
+        {"dimension": "inputs_outputs", "field": "primary", "status": "confirmed"},
+        {"dimension": "ownership_decision_authority", "field": "primary", "status": "confirmed"},
+        {"dimension": "verification", "field": "primary", "status": "confirmed"}
+      ],
+      "expected": {
+        "overall_score": 0.22666666666666666,
+        "dimension_scores": [["goal", 0.2833333333333333], ["actors_context", 0.0], ["scope_non_goals", 0.0], ["constraints", 0.0], ["success_criteria", 0.0], ["inputs_outputs", 0.0], ["ownership_decision_authority", 0.0], ["verification", 0.0]]
+      }
+    }
+  ]
+}
