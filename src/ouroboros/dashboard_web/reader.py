@@ -107,6 +107,144 @@ class PickerIndexContractError(RuntimeError):
         super().__init__(f"dashboard picker projection {detail}")
 
 
+class InterviewSource(NamedTuple):
+    """Canonical persisted source turns for one authorized Interview identity."""
+
+    interview_id: str
+    status: str
+    rounds: tuple[dict[str, int | str | None], ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "interview_id": self.interview_id,
+            "status": self.status,
+            "rounds": list(self.rounds),
+        }
+
+
+def _default_interview_state_dir() -> Path:
+    """Return InterviewHandler's default canonical persisted-state directory."""
+    return Path.home() / ".ouroboros" / "data"
+
+
+def _validate_interview_identity(interview_id: object) -> str:
+    """Reject selectors that could make the identity surface a file API."""
+    if (
+        not isinstance(interview_id, str)
+        or not interview_id.strip(RUNTIME_STATUS_ASCII_WHITESPACE)
+        or "/" in interview_id
+        or "\\" in interview_id
+        or interview_id in {".", ".."}
+    ):
+        raise PickerIndexContractError(frozenset(), detail="invalid Interview identity")
+    return interview_id
+
+
+def _validate_interview_root(conn: sqlite3.Connection, interview_id: str) -> None:
+    """Enforce the complete C2 singleton-root authorization contract."""
+    missing_contract = frozenset(PICKER_CONTRACT_NAMES) - matching_picker_contract(conn)
+    if missing_contract:
+        raise PickerIndexContractError(missing_contract)
+    if (
+        conn.execute(
+            "SELECT 1 FROM events "
+            f"INDEXED BY {PICKER_GAP_INDEX} "
+            f"WHERE {PICKER_PROJECTION_SCOPE_SQL} "
+            f"AND picker_projection_version IS NOT {PICKER_PROJECTION_VERSION} LIMIT 1"
+        ).fetchone()
+        is not None
+    ):
+        raise PickerIndexContractError(frozenset(), detail="contains unprojected relevant events")
+    pointers = conn.execute(
+        f"SELECT event_rowid FROM {PICKER_INTERVIEW_ROOT_TABLE} "
+        f"INDEXED BY {PICKER_INTERVIEW_ROOT_INDEX} WHERE interview_id = ? LIMIT 2",
+        (interview_id,),
+    ).fetchall()
+    if len(pointers) != 1:
+        raise PickerIndexContractError(
+            frozenset(), detail="missing or ambiguous Interview root identity"
+        )
+    root = conn.execute(
+        "SELECT aggregate_type, aggregate_id, event_type, payload FROM events WHERE rowid = ?",
+        (pointers[0]["event_rowid"],),
+    ).fetchone()
+    if (
+        root is None
+        or root["aggregate_type"] != "interview"
+        or root["aggregate_id"] != interview_id
+        or root["event_type"] != "interview.started"
+        or not isinstance(_decode_payload(root["payload"]), dict)
+    ):
+        raise PickerIndexContractError(frozenset(), detail="Interview root pointer mismatch")
+
+
+def read_interview_source(db_path: str | Path, interview_id: str) -> InterviewSource:
+    """Read canonical turns after C2 authorizes exactly one Interview identity.
+
+    EventStore payloads participate only in authorization above; they are never
+    inspected for, or used to reconstruct, source turn text.
+    """
+    identity = _validate_interview_identity(interview_id)
+    path = Path(db_path).expanduser()
+    if not path.exists():
+        raise PickerIndexContractError(frozenset(), detail="missing Interview root identity")
+    conn = _connect_readonly(path)
+    try:
+        conn.execute("BEGIN")
+        _validate_interview_root(conn, identity)
+    finally:
+        conn.close()
+
+    source_path = _default_interview_state_dir() / f"interview_{identity}.json"
+    try:
+        # Import lazily: the Dashboard's existing EventStore-only views do not
+        # depend on the optional authoring model graph.
+        from ouroboros.bigbang.interview import InterviewState
+
+        state = InterviewState.model_validate_json(source_path.read_text(encoding="utf-8"))
+    except (AssertionError, ImportError, OSError, ValueError):
+        return InterviewSource(identity, "unavailable", ())
+    if state.interview_id != identity:
+        return InterviewSource(identity, "unavailable", ())
+    rounds = tuple(
+        {
+            "round_number": round_data.round_number,
+            "question": round_data.question,
+            "answer": round_data.user_response,
+        }
+        for round_data in sorted(state.rounds, key=lambda round_data: round_data.round_number)
+    )
+    return InterviewSource(identity, "available", rounds)
+
+
+def linked_interview_id(db_path: str | Path, run_id: str) -> str | None:
+    """Return the explicit C1-linked Interview identity for a valid run."""
+    path = Path(db_path).expanduser()
+    if not path.exists():
+        return None
+    conn = _connect_readonly(path)
+    try:
+        conn.execute("BEGIN")
+        missing_contract = frozenset(PICKER_CONTRACT_NAMES) - matching_picker_contract(conn)
+        if missing_contract:
+            raise PickerIndexContractError(missing_contract)
+        if (
+            conn.execute(
+                "SELECT 1 FROM events "
+                f"INDEXED BY {PICKER_GAP_INDEX} "
+                f"WHERE {PICKER_PROJECTION_SCOPE_SQL} "
+                f"AND picker_projection_version IS NOT {PICKER_PROJECTION_VERSION} LIMIT 1"
+            ).fetchone()
+            is not None
+        ):
+            raise PickerIndexContractError(
+                frozenset(), detail="contains unprojected relevant events"
+            )
+        return _linked_interview_id(_resolve_run_cluster(conn, run_id))
+    finally:
+        conn.close()
+
+
 _EXPLICIT_TERMINAL_PRECEDENCE = {
     "completed": 1,
     "cancelled": 2,
@@ -598,56 +736,16 @@ class InterviewTail:
             return []
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError("Interview event limit must be a positive integer")
+        identity = _validate_interview_identity(self._interview_id)
         conn = _connect_readonly(self._db_path)
         try:
             conn.execute("BEGIN")
-            missing_contract = frozenset(PICKER_CONTRACT_NAMES) - matching_picker_contract(conn)
-            if missing_contract:
-                raise PickerIndexContractError(missing_contract)
-            if (
-                conn.execute(
-                    "SELECT 1 FROM events "
-                    f"INDEXED BY {PICKER_GAP_INDEX} "
-                    f"WHERE {PICKER_PROJECTION_SCOPE_SQL} "
-                    f"AND picker_projection_version IS NOT {PICKER_PROJECTION_VERSION} LIMIT 1"
-                ).fetchone()
-                is not None
-            ):
-                raise PickerIndexContractError(
-                    frozenset(), detail="contains unprojected relevant events"
-                )
-            if not isinstance(self._interview_id, str) or not self._interview_id.strip(
-                RUNTIME_STATUS_ASCII_WHITESPACE
-            ):
-                raise PickerIndexContractError(frozenset(), detail="invalid Interview identity")
-            pointers = conn.execute(
-                f"SELECT event_rowid FROM {PICKER_INTERVIEW_ROOT_TABLE} "
-                f"INDEXED BY {PICKER_INTERVIEW_ROOT_INDEX} WHERE interview_id = ? LIMIT 2",
-                (self._interview_id,),
-            ).fetchall()
-            if len(pointers) != 1:
-                raise PickerIndexContractError(
-                    frozenset(), detail="missing or ambiguous Interview root identity"
-                )
-            root = conn.execute(
-                "SELECT aggregate_type, aggregate_id, event_type, payload FROM events WHERE rowid = ?",
-                (pointers[0]["event_rowid"],),
-            ).fetchone()
-            if (
-                root is None
-                or root["aggregate_type"] != "interview"
-                or root["aggregate_id"] != self._interview_id
-                or root["event_type"] != "interview.started"
-                or not isinstance(_decode_payload(root["payload"]), dict)
-            ):
-                raise PickerIndexContractError(
-                    frozenset(), detail="Interview root pointer mismatch"
-                )
+            _validate_interview_root(conn, identity)
             rows = conn.execute(
                 "SELECT rowid, aggregate_id, event_type, payload FROM events "
                 "WHERE rowid > ? AND aggregate_type = 'interview' AND aggregate_id = ? "
                 "ORDER BY rowid LIMIT ?",
-                (self._cursor, self._interview_id, limit),
+                (self._cursor, identity, limit),
             ).fetchall()
         finally:
             conn.close()
@@ -1109,7 +1207,10 @@ def _decode_payload(payload: object) -> Any:
 
 __all__ = [
     "EventTail",
+    "InterviewSource",
     "PickerIndexContractError",
     "default_db_path",
+    "linked_interview_id",
     "list_recent_executions",
+    "read_interview_source",
 ]

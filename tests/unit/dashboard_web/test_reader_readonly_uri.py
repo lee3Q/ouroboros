@@ -19,6 +19,7 @@ from ouroboros.dashboard_web.reader import (
     PickerIndexContractError,
     _connect_readonly,
     list_recent_executions,
+    read_interview_source,
 )
 from ouroboros.events.base import BaseEvent
 from ouroboros.orchestrator.events import create_workflow_progress_event
@@ -3034,3 +3035,92 @@ async def test_interview_tail_advances_past_unrecognized_event_suffix(tmp_path) 
     assert [event["event_type"] for event in tail.fetch_new(limit=3)] == [
         "interview.response.recorded"
     ]
+
+
+async def test_interview_source_reads_only_matching_canonical_state_in_round_order(
+    tmp_path, monkeypatch
+) -> None:
+    """Source text comes from persisted state, never the EventStore preview."""
+    from ouroboros.bigbang.interview import InterviewRound, InterviewState
+    from ouroboros.events.interview import interview_started
+
+    db = tmp_path / "interview-source.db"
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    store = EventStore(f"sqlite+aiosqlite:///{db}")
+    await store.initialize()
+    try:
+        await store.append(interview_started("interview-source", "event preview must not render"))
+    finally:
+        await store.close()
+    state = InterviewState(
+        interview_id="interview-source",
+        rounds=[
+            InterviewRound(round_number=2, question="Second question", user_response=None),
+            InterviewRound(round_number=1, question="First question", user_response="First answer"),
+        ],
+    )
+    (state_dir / "interview_interview-source.json").write_text(
+        state.model_dump_json(), encoding="utf-8"
+    )
+    monkeypatch.setattr(reader_module, "_default_interview_state_dir", lambda: state_dir)
+
+    source = read_interview_source(db, "interview-source")
+
+    assert source.as_dict() == {
+        "interview_id": "interview-source",
+        "status": "available",
+        "rounds": [
+            {"round_number": 1, "question": "First question", "answer": "First answer"},
+            {"round_number": 2, "question": "Second question", "answer": None},
+        ],
+    }
+    assert "event preview" not in str(source.rounds)
+
+
+@pytest.mark.parametrize("state_body", [None, "{not-json", '{"interview_id":"other"}'])
+async def test_interview_source_reports_unavailable_for_non_authoritative_state(
+    tmp_path, monkeypatch, state_body: str | None
+) -> None:
+    from ouroboros.events.interview import interview_started
+
+    db = tmp_path / "unavailable-source.db"
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    store = EventStore(f"sqlite+aiosqlite:///{db}")
+    await store.initialize()
+    try:
+        await store.append(interview_started("interview-source", "preview is never source"))
+    finally:
+        await store.close()
+    if state_body is not None:
+        (state_dir / "interview_interview-source.json").write_text(state_body, encoding="utf-8")
+    monkeypatch.setattr(reader_module, "_default_interview_state_dir", lambda: state_dir)
+
+    source = read_interview_source(db, "interview-source")
+
+    assert source.as_dict() == {
+        "interview_id": "interview-source",
+        "status": "unavailable",
+        "rounds": [],
+    }
+
+
+async def test_interview_source_rejects_path_selector_before_opening_a_file(
+    tmp_path, monkeypatch
+) -> None:
+    db = tmp_path / "path-selector.db"
+    _make_events_db(db, [])
+    opened = False
+
+    def unexpected_state_dir():
+        nonlocal opened
+        opened = True
+        return tmp_path
+
+    monkeypatch.setattr(reader_module, "_default_interview_state_dir", unexpected_state_dir)
+
+    with pytest.raises(PickerIndexContractError, match="invalid Interview identity"):
+        read_interview_source(db, "../other")
+
+    assert not opened

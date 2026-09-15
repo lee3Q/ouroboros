@@ -11,10 +11,12 @@ import sys
 
 import pytest
 
+from ouroboros.dashboard_web import reader as reader_module
 from ouroboros.dashboard_web.server import serve_background
 from ouroboros.persistence.picker_indexes import (
     DIRECT_EVENT_INDEX,
     PICKER_CONTRACT_DDL_BY_NAME,
+    PICKER_INTERVIEW_ROOT_TABLE,
     PICKER_META_TABLE,
     PICKER_PROJECTION_VERSION,
     PICKER_START_SESSION_TABLE,
@@ -116,6 +118,20 @@ def _add_linked_interview(path) -> None:
             "payload = json_set(payload, '$.interview_id', 'interview-http') "
             "WHERE event_type = 'orchestrator.session.started'"
         )
+        started = conn.execute(
+            "INSERT INTO events (aggregate_type, aggregate_id, event_type, payload) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                "interview",
+                "interview-http",
+                "interview.started",
+                json.dumps({"initial_context": "event preview must not render"}),
+            ),
+        )
+        conn.execute(
+            f"INSERT INTO {PICKER_INTERVIEW_ROOT_TABLE} (interview_id, event_rowid) VALUES (?, ?)",
+            ("interview-http", int(started.lastrowid)),
+        )
         conn.execute(
             "INSERT INTO events (aggregate_type, aggregate_id, event_type, payload) "
             "VALUES (?, ?, ?, ?)",
@@ -125,6 +141,29 @@ def _add_linked_interview(path) -> None:
                 "interview.response.recorded",
                 json.dumps({"round_number": 2}),
             ),
+        )
+        conn.execute(
+            "UPDATE events SET picker_projection_version = ? WHERE aggregate_id = ?",
+            (PICKER_PROJECTION_VERSION, "interview-http"),
+        )
+        conn.execute(
+            f"UPDATE {PICKER_META_TABLE} SET backfilled_through_rowid = "
+            "(SELECT MAX(rowid) FROM events)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _add_unregistered_linked_interview(path) -> None:
+    """Add a C1 link without the C2 root required for canonical source access."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("ALTER TABLE events ADD COLUMN aggregate_type TEXT")
+        conn.execute(
+            "UPDATE events SET aggregate_type = 'session', "
+            "payload = json_set(payload, '$.interview_id', 'interview-unregistered') "
+            "WHERE event_type = 'orchestrator.session.started'"
         )
         conn.commit()
     finally:
@@ -280,6 +319,74 @@ def test_snapshot_and_sse_share_linked_interview_read_only_projection(tmp_path) 
     for value in ("interview-http", "active", "interview.response.recorded"):
         assert value in snapshot_html
     assert 'method:"POST"' not in snapshot_html
+
+
+@pytest.mark.parametrize("path", ["/snapshot?run=exec-http", "/events?run=exec-http"])
+def test_linked_source_requires_c2_root_before_snapshot_or_sse_headers(tmp_path, path: str) -> None:
+    db = tmp_path / "unregistered-linked-source.db"
+    _make_events_db(db, contract="valid")
+    _add_unregistered_linked_interview(db)
+
+    with _running_server(db) as server:
+        host, port = server.server_address
+        status, headers, body = _get(host, port, path)
+        assert server.open_streams == 0
+
+    assert status == 503
+    assert headers["Content-Type"] == "application/json"
+    assert json.loads(body) == {"error": "picker_index_contract_unavailable"}
+
+
+async def test_interview_source_http_and_snapshot_render_canonical_text_inertly(
+    tmp_path, monkeypatch
+) -> None:
+    from ouroboros.bigbang.interview import InterviewRound, InterviewState
+    from ouroboros.events.interview import interview_started
+    from ouroboros.persistence.event_store import EventStore
+
+    db = tmp_path / "source-http.db"
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    store = EventStore(f"sqlite+aiosqlite:///{db}")
+    await store.initialize()
+    try:
+        await store.append(interview_started("interview-http", "preview must not render"))
+    finally:
+        await store.close()
+    state = InterviewState(
+        interview_id="interview-http",
+        rounds=[
+            InterviewRound(
+                round_number=1,
+                question="<script>question</script>",
+                user_response="answer </script><b>inert</b>",
+            )
+        ],
+    )
+    (state_dir / "interview_interview-http.json").write_text(
+        state.model_dump_json(), encoding="utf-8"
+    )
+    monkeypatch.setattr(reader_module, "_default_interview_state_dir", lambda: state_dir)
+
+    with _running_server(db) as server:
+        host, port = server.server_address
+        status, _, body = _get(host, port, "/api/interview-source?interview=interview-http")
+        snapshot_status, _, snapshot_body = _get(host, port, "/snapshot?interview=interview-http")
+        assert _get(host, port, "/api/interview-source?path=/tmp/x")[0] == 400
+        assert _get(host, port, "/api/interview-source?interview=../outside")[0] == 503
+
+    assert status == 200
+    assert json.loads(body)["source"]["rounds"] == [
+        {
+            "round_number": 1,
+            "question": "<script>question</script>",
+            "answer": "answer </script><b>inert</b>",
+        }
+    ]
+    assert snapshot_status == 200
+    snapshot_html = snapshot_body.decode("utf-8")
+    assert "<\\/script>" in snapshot_html
+    assert "textContent = round.question" in snapshot_html
 
 
 def test_stream_contract_loss_closes_without_handler_traceback(tmp_path, monkeypatch) -> None:

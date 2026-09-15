@@ -95,6 +95,11 @@ _PAGE_TEMPLATE = """<!doctype html>
     border: 1px solid var(--border); border-radius: 8px; color: var(--muted); font-size: 11px; }
   #interview-panel strong { color: var(--text); font-size: 12px; margin-right: 10px; }
   #interview-panel .interview-status { color: var(--executing); text-transform: uppercase; }
+  #interview-source { margin-top: 10px; display:flex; flex-direction:column; gap:9px; }
+  .source-unavailable { color: var(--failed); }
+  .source-round { border-top:1px solid var(--border); padding-top:8px; }
+  .source-label { color:var(--muted); display:block; margin-bottom:3px; }
+  .source-text { color:var(--text); white-space:pre-wrap; overflow-wrap:anywhere; }
   .st-pending  .col-head { color: var(--pending); }
   .st-executing .col-head { color: var(--executing); }
   .st-completed .col-head { color: var(--completed); }
@@ -118,7 +123,7 @@ _PAGE_TEMPLATE = """<!doctype html>
   <div id="legend"></div>
 </header>
 <main id="run-list" hidden></main>
-<main id="detail-view" hidden><div id="interview-panel" hidden><strong>Interview</strong><span id="interview-detail"></span></div><div id="board"></div></main>
+<main id="detail-view" hidden><div id="interview-panel" hidden><strong>Interview</strong><span id="interview-detail"></span><div id="interview-source"></div></div><div id="board"></div></main>
 <script>
 const COLS = [
   ["pending", "To Do"], ["executing", "In Progress"],
@@ -162,9 +167,43 @@ function renderInterview(interview) {
   panel.hidden = false;
 }
 
+function renderInterviewSource(source) {
+  const panel = document.getElementById("interview-panel");
+  const container = document.getElementById("interview-source");
+  container.replaceChildren();
+  if (!source || !source.status) return;
+  panel.hidden = false;
+  if (source.status !== "available") {
+    const unavailable = document.createElement("div");
+    unavailable.className = "source-unavailable";
+    unavailable.textContent = "Original source unavailable";
+    container.append(unavailable);
+    return;
+  }
+  for (const round of (Array.isArray(source.rounds) ? source.rounds : [])) {
+    const row = document.createElement("div");
+    row.className = "source-round";
+    const questionLabel = document.createElement("span");
+    questionLabel.className = "source-label";
+    questionLabel.textContent = `Question ${round.round_number}`;
+    const question = document.createElement("div");
+    question.className = "source-text";
+    question.textContent = round.question == null ? "" : String(round.question);
+    const answerLabel = document.createElement("span");
+    answerLabel.className = "source-label";
+    answerLabel.textContent = "Answer";
+    const answer = document.createElement("div");
+    answer.className = "source-text";
+    answer.textContent = round.answer == null ? "Unanswered" : String(round.answer);
+    row.append(questionLabel, question, answerLabel, answer);
+    container.append(row);
+  }
+}
+
 function render(board) {
   const { meta, columns, providers } = board;
   renderInterview(meta && meta.interview);
+  renderInterviewSource(meta && meta.interview_source);
   document.getElementById("m-progress").textContent =
     (meta.total ? `${meta.completed}/${meta.total} ACs` : "");
   document.getElementById("m-phase").textContent =
@@ -239,6 +278,7 @@ function setView(detail, runId) {
     document.getElementById("m-frugality").textContent = "";
     document.getElementById("m-frugality-evidence").textContent = "";
     renderInterview(null);
+    renderInterviewSource(null);
     document.getElementById("legend").innerHTML = "";
   }
 }

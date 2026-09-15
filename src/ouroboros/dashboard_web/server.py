@@ -25,8 +25,10 @@ from ouroboros.dashboard_web.reader import (
     EventTail,
     InterviewTail,
     PickerIndexContractError,
+    linked_interview_id,
     list_recent_executions,
     list_recent_interviews,
+    read_interview_source,
 )
 from ouroboros.persistence.picker_indexes import RUNTIME_STATUS_ASCII_WHITESPACE
 
@@ -126,6 +128,18 @@ class _Handler(BaseHTTPRequestHandler):
             # The picker is a real dashboard client even though it polls instead
             # of holding an SSE stream. Refresh only after a successful response.
             self.server.touch()
+        elif path == "/api/interview-source":
+            source_id = _selected_source_identity(query)
+            if source_id is None:
+                self.send_error(400, "provide exactly one nonblank Interview identity")
+                return
+            try:
+                source = read_interview_source(self.server.db_path, source_id)
+            except PickerIndexContractError:
+                self._send_json({"error": _PICKER_CONTRACT_ERROR}, status=503)
+                return
+            self._send_json({"source": source.as_dict()})
+            self.server.touch()
         elif path == "/snapshot":
             selected = _selected_aggregate(query)
             if selected is None:
@@ -153,10 +167,10 @@ class _Handler(BaseHTTPRequestHandler):
         )
         try:
             events = tail.fetch_new(limit=100000)
+            board = self._board_with_source(events, run_id, interview_id)
         except PickerIndexContractError:
             self._send_json({"error": _PICKER_CONTRACT_ERROR}, status=503)
             return
-        board = reduce_board(events, execution_id=run_id or None)
         self._send_bytes(
             static_html(board, run_id=run_id or interview_id).encode("utf-8"),
             "text/html; charset=utf-8",
@@ -187,9 +201,10 @@ class _Handler(BaseHTTPRequestHandler):
         )
         try:
             first_batch = tail.fetch_new()
+            first_board = self._board_with_source(first_batch, run_id, interview_id)
         except PickerIndexContractError:
             # The HTTP status cannot change after SSE headers are committed, so
-            # validate and fetch once before announcing a successful stream.
+            # validate the stream and its source once before announcing success.
             self._send_json({"error": _PICKER_CONTRACT_ERROR}, status=503)
             return
 
@@ -209,12 +224,15 @@ class _Handler(BaseHTTPRequestHandler):
                 if first_batch is not None:
                     new = first_batch
                     first_batch = None
+                    board = first_board
                 else:
                     new = tail.fetch_new()
+                    board = None
                 now = time.monotonic()
                 if new:
                     accumulated.extend(new)
-                    board = reduce_board(accumulated, execution_id=run_id or None)
+                    if board is None:
+                        board = self._board_with_source(accumulated, run_id, interview_id)
                     payload = json.dumps(board, default=str)
                     if payload != last_payload:
                         self._sse_send(payload)
@@ -244,6 +262,26 @@ class _Handler(BaseHTTPRequestHandler):
         # One SSE event; data may not contain bare newlines (json.dumps escapes them).
         self.wfile.write(f"data: {data}\n\n".encode())
         self.wfile.flush()
+
+    def _board_with_source(
+        self, events: list[dict[str, Any]], run_id: str, interview_id: str
+    ) -> dict[str, Any]:
+        """Attach only canonical source turns to an already read-only board."""
+        source_id = interview_id or linked_interview_id(self.server.db_path, run_id)
+        board = reduce_board(events, execution_id=run_id or None)
+        if source_id is not None:
+            board["meta"]["interview_source"] = read_interview_source(
+                self.server.db_path, source_id
+            ).as_dict()
+        return board
+
+
+def _selected_source_identity(query: dict[str, list[str]]) -> str | None:
+    """Accept only one identity selector; no path-like resource parameter exists."""
+    if set(query) != {"interview"} or len(query["interview"]) != 1:
+        return None
+    identity = query["interview"][0]
+    return identity if identity.strip(RUNTIME_STATUS_ASCII_WHITESPACE) else None
 
 
 def make_server(*, db_path: str, host: str, port: int) -> _DashboardServer:
