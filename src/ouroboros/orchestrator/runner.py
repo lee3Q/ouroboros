@@ -40,7 +40,11 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from ouroboros.backends import backend_supports_tool_envelope, get_backend_capability
+from ouroboros.backends import (
+    backend_supports_tool_envelope,
+    get_backend_capability,
+    get_backend_factory_spec,
+)
 from ouroboros.config import (
     MAX_USAGE_LIMIT_PAUSE_SECONDS,
     get_llm_model_for_role,
@@ -6876,8 +6880,15 @@ class OrchestratorRunner:
 
         backend = (
             llm_backend
-            if isinstance(llm_backend, str) and llm_backend
-            else (self._adapter.runtime_backend)
+            if isinstance(llm_backend, str)
+            and llm_backend
+            and get_backend_factory_spec(llm_backend, kind="llm") is not None
+            else (
+                self._adapter.runtime_backend
+                if isinstance(self._adapter.runtime_backend, str)
+                and get_backend_factory_spec(self._adapter.runtime_backend, kind="llm") is not None
+                else getattr(self._adapter, "_default_llm_backend", None)
+            )
         )
         try:
             resolved_backend = resolve_llm_backend(backend)

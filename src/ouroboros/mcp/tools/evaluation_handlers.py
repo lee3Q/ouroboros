@@ -803,12 +803,6 @@ class EvaluateHandler:
             # the evaluation prompt.
             from ouroboros.evaluation.artifact_collector import ArtifactCollector
 
-            artifact_file = working_dir / ".ouroboros_eval_artifact.md"
-            try:
-                artifact_file.write_text(artifact, encoding="utf-8")
-            except OSError:
-                pass  # Non-critical — evaluator falls back to text_summary
-
             try:
                 artifact_bundle = ArtifactCollector().collect(artifact, str(working_dir))
             except Exception as exc:
@@ -818,6 +812,12 @@ class EvaluateHandler:
                     working_dir=str(working_dir),
                 )
                 artifact_bundle = None
+
+            artifact_file = working_dir / ".ouroboros_eval_artifact.md"
+            try:
+                artifact_file.write_text(artifact, encoding="utf-8")
+            except OSError:
+                pass  # Non-critical — evaluator falls back to text_summary
 
             # Stage 1 trusts .ouroboros/mechanical.toml only. When the file is
             # absent we run the AI detector once to author it (best-effort).

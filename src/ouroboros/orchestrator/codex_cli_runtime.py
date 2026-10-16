@@ -21,6 +21,7 @@ import tempfile
 import tomllib
 from typing import Any
 
+from ouroboros.backends import get_backend_factory_spec
 from ouroboros.codex.cli_policy import (
     DEFAULT_CODEX_CHILD_SESSION_ENV_KEYS,
     DEFAULT_MAX_OUROBOROS_DEPTH,
@@ -317,7 +318,13 @@ class CodexCliRuntime:
         self._skills_dir = self._resolve_skills_dir(skills_dir)
         self._skill_dispatcher = skill_dispatcher
         self._skill_dispatcher_identity = self._fingerprint_skill_dispatcher(skill_dispatcher)
-        self._llm_backend = llm_backend or self._default_llm_backend
+        self._llm_backend = (
+            llm_backend
+            if isinstance(llm_backend, str)
+            and llm_backend
+            and get_backend_factory_spec(llm_backend, kind="llm") is not None
+            else self._default_llm_backend
+        )
         self._builtin_mcp_handlers: dict[str, Any] | None = None
         self._runtime_profile = runtime_profile
         self._codex_profile = resolve_codex_profile(
@@ -4066,6 +4073,12 @@ class CodexCliRuntime:
                         self._build_resume_retry_metadata(attempted_resume_session_id)
                     )
 
+            self._enrich_terminal_result_data(
+                result_data,
+                prompt=prompt,
+                final_message=final_message,
+            )
+
             yield AgentMessage(
                 type="result",
                 content=final_message,
@@ -4088,6 +4101,15 @@ class CodexCliRuntime:
                 with contextlib.suppress(asyncio.CancelledError):
                     await stderr_task
             output_path.unlink(missing_ok=True)
+
+    def _enrich_terminal_result_data(
+        self,
+        result_data: dict[str, Any],
+        *,
+        prompt: str,
+        final_message: str,
+    ) -> None:
+        """Optional subclass hook to enrich terminal result metadata."""
 
     async def execute_task_to_result(
         self,

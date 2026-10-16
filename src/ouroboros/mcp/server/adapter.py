@@ -1729,7 +1729,7 @@ def create_ouroboros_server(
     # force a single-turn budget: even denied or empty-envelope tool attempts
     # can consume the first turn before the model emits final text.
     stage_max_turns = config.orchestrator.default_max_turns
-    from ouroboros.backends import backend_supports_tool_envelope
+    from ouroboros.backends import backend_supports_tool_envelope, get_backend_factory_spec
     from ouroboros.providers import resolve_llm_backend
 
     llm_adapters: dict[str, Any] = {}
@@ -1887,8 +1887,14 @@ def create_ouroboros_server(
             backend=execute_runtime_backend,
             model=execution_model,
             cwd=task_cwd or effective_cwd,
-            # Executor's internal LLM follows its own EXECUTE stage, not EVALUATE.
-            llm_backend=execute_runtime_backend,
+            # Executor's internal LLM follows its own EXECUTE stage when it is a
+            # registered LLM provider; runtime-only backends (e.g. antigravity)
+            # fall back to their default LLM backend.
+            llm_backend=(
+                execute_runtime_backend
+                if get_backend_factory_spec(execute_runtime_backend, kind="llm") is not None
+                else None
+            ),
         )
         _evo_mcp_manager = mcp_bridge.manager if mcp_bridge is not None else None
         _evo_mcp_prefix = (
@@ -2145,8 +2151,13 @@ def create_ouroboros_server(
             model=validation_model,
             cwd=project_dir,
             permission_mode="bypassPermissions",
-            # Validation runs on the EXECUTE stage; align its internal LLM too.
-            llm_backend=execute_runtime_backend,
+            # Validation runs on the EXECUTE stage; align its internal LLM when
+            # the runtime backend is also a registered LLM provider.
+            llm_backend=(
+                execute_runtime_backend
+                if get_backend_factory_spec(execute_runtime_backend, kind="llm") is not None
+                else None
+            ),
         )
 
         for attempt in range(1, max_attempts + 1):

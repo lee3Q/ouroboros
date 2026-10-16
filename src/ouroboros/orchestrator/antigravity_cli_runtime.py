@@ -39,6 +39,8 @@ Custom CLI Path:
 
 from __future__ import annotations
 
+from typing import Any
+
 import structlog
 
 from ouroboros.orchestrator.adapter import (
@@ -195,6 +197,33 @@ class AntigravityCLIRuntime(GeminiCLIRuntime):
         if not message.content:
             return last_content
         return f"{last_content}\n{message.content}" if last_content else message.content
+
+    def _enrich_terminal_result_data(
+        self,
+        result_data: dict[str, Any],
+        *,
+        prompt: str,
+        final_message: str,
+    ) -> None:
+        """Populate token estimation metadata for plain-text Antigravity CLI runs.
+
+        Because ``agy -p`` emits plain text rather than ``stream-json`` usage
+        telemetry, populate deterministic character-based token estimates on the
+        terminal result message so downstream evolution/Ralph cost accounting has
+        non-zero usage numbers.
+        """
+        if "usage" in result_data or "estimated_tokens" in result_data:
+            return
+        input_tokens = max(1, len(prompt) // 4) if prompt else 0
+        output_tokens = max(1, len(final_message) // 4) if final_message else 0
+        total_tokens = input_tokens + output_tokens
+        result_data["estimated_tokens"] = total_tokens
+        result_data["usage"] = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "estimated": True,
+        }
 
     @property
     def capabilities(self) -> RuntimeCapabilities:

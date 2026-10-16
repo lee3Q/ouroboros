@@ -90,17 +90,18 @@ def candidates_from_contrast_answer(
     answer = answer.strip()
     if not answer:
         raise ValueError("contrast answer must not be blank")
+    bounded_answer = answer[:8000]
     evidence_id = f"reference-contrast:{cue.reference_id}"
     evidence = RequirementEvidence(
         evidence_id=evidence_id,
         kind=RequirementEvidenceKind.REFERENCE_CONTRAST,
-        text=answer,
+        text=bounded_answer,
         reference_id=cue.reference_id,
     )
     candidate = RequirementCandidate(
         candidate_id=f"{candidate_id_prefix}:{cue.reference_id}:contrast",
         section=RequirementSection.CONTEXT,
-        text=answer,
+        text=bounded_answer,
         content_source=CandidateContentSource.REFERENCE_DERIVED,
         resolution=CandidateResolution.NEEDS_CONFIRMATION,
         confirmation_authority=ConfirmationAuthority.NONE,

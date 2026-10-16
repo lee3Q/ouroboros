@@ -293,6 +293,30 @@ def _collect_manifests(working_dir: Path) -> dict[str, str]:
         if remaining <= 0:
             break
         remaining = _append_subdir_manifests(working_dir, subdir, collected, remaining)
+    if not collected:
+        try:
+            tests_dir = working_dir / "tests"
+            test_files: list[str] = []
+            if tests_dir.is_dir():
+                test_files.extend(
+                    sorted(p.relative_to(working_dir).as_posix() for p in tests_dir.glob("test*.py"))[:10]
+                )
+            test_files.extend(
+                sorted(p.relative_to(working_dir).as_posix() for p in working_dir.glob("test*.py"))[:10]
+            )
+            if test_files:
+                default_cmd = (
+                    "python3 -m unittest discover -s tests"
+                    if tests_dir.is_dir() and any(f.startswith("tests/") for f in test_files)
+                    else "python3 -m unittest discover"
+                )
+                collected["<python-stdlib-unittest-layout>"] = (
+                    "# Greenfield Python stdlib project layout (no pyproject.toml)\n"
+                    f"# Discovered test files: {', '.join(test_files)}\n"
+                    f"# Recommended test_command: {default_cmd}\n"
+                )
+        except OSError:
+            pass
     return collected
 
 

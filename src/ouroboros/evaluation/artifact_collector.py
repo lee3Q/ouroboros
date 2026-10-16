@@ -251,6 +251,7 @@ class ArtifactCollector:
             r"(?:Write|Edit)(?:\s+to)?:\s*(/[^\s]+)",
             r"(?:file_path|File):\s*(/[^\s]+)",
             r"Created\s+(?:file\s+)?(/[^\s]+)",
+            r"file://(/[^\s\)\]\`\"'<>#]+)",
         ]
 
         real_project = os.path.realpath(project_dir) if project_dir else None
@@ -263,9 +264,13 @@ class ArtifactCollector:
                 path = match.group(1)
                 if path in seen:
                     continue
-                # Block sensitive files (env, credentials, private keys) even
-                # when they appear in tool-call output.
-                if _is_sensitive_file(os.path.basename(path)):
+                # Block sensitive files (env, credentials, private keys) and
+                # internal evaluation summary scratch files even when they appear
+                # in tool-call output.
+                if (
+                    os.path.basename(path) == ".ouroboros_eval_artifact.md"
+                    or _is_sensitive_file(os.path.basename(path))
+                ):
                     continue
                 try:
                     if not os.path.isfile(path):
@@ -300,6 +305,8 @@ class ArtifactCollector:
             dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith(".")]
 
             for fname in files:
+                if fname == ".ouroboros_eval_artifact.md":
+                    continue
                 ext = os.path.splitext(fname)[1].lower()
                 if ext in _SKIP_EXTENSIONS:
                     continue

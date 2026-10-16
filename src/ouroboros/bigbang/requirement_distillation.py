@@ -91,18 +91,19 @@ def build_requirement_distillation(state: InterviewState) -> RequirementDistilla
 
     if state.initial_context.strip():
         evidence_id = "initial-context"
+        bounded_initial = state.initial_context.strip()[:8000]
         evidence.append(
             RequirementEvidence(
                 evidence_id=evidence_id,
                 kind=RequirementEvidenceKind.USER_STATEMENT,
-                text=state.initial_context.strip(),
+                text=bounded_initial,
             )
         )
         candidates.append(
             RequirementCandidate(
                 candidate_id="initial-goal",
                 section=RequirementSection.GOAL,
-                text=state.initial_context.strip(),
+                text=bounded_initial,
                 content_source=CandidateContentSource.USER_STATED,
                 resolution=CandidateResolution.CONFIRMED,
                 confirmation_authority=ConfirmationAuthority.USER,
@@ -159,12 +160,13 @@ def build_requirement_distillation(state: InterviewState) -> RequirementDistilla
             resolved_reference_ids.add(reference_cue.reference_id)
             continue
 
+        bounded_answer = answer[:8000]
         evidence_id = f"round-{round_data.round_number}:user"
         evidence.append(
             RequirementEvidence(
                 evidence_id=evidence_id,
                 kind=RequirementEvidenceKind.USER_STATEMENT,
-                text=answer,
+                text=bounded_answer,
             )
         )
         explicitly_required = bool(_EXPLICIT_REQUIREMENT_RE.search(answer))
@@ -184,7 +186,7 @@ def build_requirement_distillation(state: InterviewState) -> RequirementDistilla
                 RequirementEvidence(
                     evidence_id=reference_evidence_id,
                     kind=RequirementEvidenceKind.REFERENCE_CUE,
-                    text=answer,
+                    text=bounded_answer,
                     reference_id=reference_id,
                 )
             )
@@ -198,7 +200,7 @@ def build_requirement_distillation(state: InterviewState) -> RequirementDistilla
             RequirementCandidate(
                 candidate_id=f"round-{round_data.round_number}:requirement",
                 section=section,
-                text=answer,
+                text=bounded_answer,
                 content_source=(
                     CandidateContentSource.REFERENCE_DERIVED
                     if referenced
@@ -241,7 +243,7 @@ def build_requirement_distillation(state: InterviewState) -> RequirementDistilla
             RequirementEvidence(
                 evidence_id=evidence_id,
                 kind=RequirementEvidenceKind.REFERENCE_CUE,
-                text=cue.excerpt or cue.label,
+                text=(cue.excerpt or cue.label)[:8000],
                 reference_id=cue.reference_id,
             )
         )

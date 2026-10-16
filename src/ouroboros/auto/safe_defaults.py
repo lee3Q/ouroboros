@@ -69,14 +69,16 @@ _SAFE_DEFAULTS: dict[str, _DefaultSpec] = {
         "Unspecified inputs can be safely bounded to existing local context.",
     ),
     "outputs": _DefaultSpec(
-        "Produce the smallest observable artifact, state change, or response needed to satisfy "
-        "the goal and make verification possible.",
-        "Unspecified outputs can be safely bounded to observable MVP behavior.",
+        "Preserve all deliverables explicitly requested in the goal; for any unspecified output "
+        "details, produce the smallest observable artifact, state change, or response needed to "
+        "make verification possible.",
+        "Unspecified outputs can be safely bounded without shrinking explicit goal deliverables.",
     ),
     "constraints": _DefaultSpec(
-        "Keep scope to a reversible local MVP, preserve existing project patterns, and avoid new "
-        "dependencies unless explicit acceptance criteria require them.",
-        "Conservative local constraints reduce execution risk.",
+        "Preserve all deliverables and surfaces explicitly requested in the goal; for unspecified "
+        "implementation choices, keep scope to a reversible local MVP, preserve existing project "
+        "patterns, and avoid new dependencies unless acceptance criteria require them.",
+        "Conservative local constraints reduce execution risk without overriding explicit deliverables.",
     ),
     "non_goals": _DefaultSpec(
         "Do not perform credential handling, billing, production deployment, legal or medical "

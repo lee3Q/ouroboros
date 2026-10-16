@@ -416,6 +416,8 @@ async def _run_auto(
                 "is preserved across process restarts"
             )
         state = store.load(resume)
+        if isinstance(goal, str) and goal.strip():
+            state.goal = goal.strip()
         persisted_runtime = state.runtime_backend
         if persisted_runtime is None and state.opencode_mode is not None:
             persisted_runtime = "opencode"
