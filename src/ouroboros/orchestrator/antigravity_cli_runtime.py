@@ -37,7 +37,9 @@ Custom CLI Path:
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -64,6 +66,16 @@ _AGY_DEFAULT_PERMISSION_MODE = "acceptEdits"
 # CLI-owned model selection; ``agy`` does not understand it as a ``--model``
 # value, so it is never forwarded on the command line.
 _SENTINEL_MODEL = "default"
+
+
+class _WorkspaceMismatchError(RuntimeError):
+    """A native init contradicts the requested workspace."""
+
+    def __init__(self, requested: str, effective: str, handle: RuntimeHandle | None) -> None:
+        super().__init__(
+            f"Antigravity workspace mismatch: requested {requested}, reported {effective}"
+        )
+        self.handle = handle
 
 
 class AntigravityCLIRuntime(GeminiCLIRuntime):
@@ -120,6 +132,65 @@ class AntigravityCLIRuntime(GeminiCLIRuntime):
         if metadata.get("text_delta"):
             messages = [replace(m, data={**m.data, "text_delta": True}) for m in messages]
         return messages
+
+    def _compose_prompt(
+        self, prompt: str, system_prompt: str | None, tools: list[str] | None
+    ) -> str:
+        requested = str(Path(self._cwd or ".").resolve())
+        workspace = (
+            f"Requested working directory: {requested}\n"
+            "Perform this task in that directory. This request does not confine filesystem access."
+        )
+        return super()._compose_prompt(f"{workspace}\n\n{prompt}", system_prompt, tools)
+
+    async def _handle_runtime_event(
+        self, event: dict[str, Any], current_handle: RuntimeHandle | None, process: Any
+    ) -> tuple[AgentMessage, ...]:
+        if event.get("type") != "init":
+            return await super()._handle_runtime_event(event, current_handle, process)
+        effective = event.get("metadata", {}).get("cwd")
+        if not isinstance(effective, str) or not effective or not Path(effective).is_absolute():
+            return ()
+        requested = str(Path(self._cwd or ".").resolve())
+        effective = str(Path(effective).resolve())
+        if effective != requested:
+            raise _WorkspaceMismatchError(requested, effective, current_handle)
+        return (
+            AgentMessage(
+                type="system",
+                content=f"Antigravity reported working directory: {effective}. Filesystem access is not confined.",
+                data={
+                    "subtype": "workspace.binding",
+                    "requested_cwd": requested,
+                    "effective_cwd": effective,
+                },
+                resume_handle=current_handle,
+            ),
+        )
+
+    async def _execute_task_impl(self, *args: Any, **kwargs: Any) -> AsyncIterator[AgentMessage]:
+        verified = False
+        try:
+            async for message in super()._execute_task_impl(*args, **kwargs):
+                verified = verified or message.data.get("subtype") == "workspace.binding"
+                yield message
+        except _WorkspaceMismatchError as exc:
+            yield AgentMessage(
+                type="result",
+                content=str(exc),
+                data={"subtype": "error", "error_type": "WorkspaceMismatchError"},
+                resume_handle=exc.handle,
+            )
+            return
+        if not verified:
+            yield AgentMessage(
+                type="system",
+                content="Antigravity did not report an absolute working directory; the effective workspace is unverified. Filesystem access is not confined.",
+                data={
+                    "subtype": "workspace.unverified",
+                    "requested_cwd": str(Path(self._cwd or ".").resolve()),
+                },
+            )
 
     # -- Permission mode overrides -----------------------------------------
 

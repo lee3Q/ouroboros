@@ -46,3 +46,16 @@ the most recent conversation rather than the requested one. A task-owned live
 headless probe continued the same native ID and recalled the prior test marker;
 its result reported two turns. Unsupported CLI versions return their resume
 error; the adapter never retries that request as a new conversation.
+
+
+## Workspace binding
+
+The prompt explicitly identifies the resolved requested working directory and
+the subprocess starts there. A native init reporting another absolute cwd
+fails the task and stops further event processing. A matching init produces a
+workspace-binding observation; missing cwd or plain output produces an explicit
+unverified-workspace message. These checks observe and reject a mismatch after
+startup; they are not a filesystem sandbox and cannot undo work the child has
+already performed. `--add-dir` is not used as evidence of replacement or
+confinement. A live IDE-daemon workspace check is recorded separately from unit
+fixtures and standalone headless probes.
