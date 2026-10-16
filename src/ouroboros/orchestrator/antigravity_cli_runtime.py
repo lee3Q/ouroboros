@@ -75,7 +75,7 @@ class AntigravityCLIRuntime(GeminiCLIRuntime):
 
     - ``agy -p`` headless invocation with ``--dangerously-skip-permissions``
     - Structured stdout normalized by :class:`AntigravityEventNormalizer`
-    - No session resumption (stateless execution model)
+    - Targeted native conversation resumption with ``--conversation``
     """
 
     _runtime_handle_backend = "antigravity_cli"
@@ -90,7 +90,7 @@ class AntigravityCLIRuntime(GeminiCLIRuntime):
     # requests, matching the Hermes runtime's convention.
     _default_llm_backend = "claude_code"
     _tempfile_prefix = "ouroboros-antigravity-"
-    _max_resume_retries = 0  # agy print mode does not support targeted resume
+    _max_resume_retries = 0  # Never retry a failed resume as a fresh conversation.
 
     def _parse_json_event(self, line: str) -> dict[str, Any] | None:
         if not line.strip():
@@ -184,7 +184,7 @@ class AntigravityCLIRuntime(GeminiCLIRuntime):
         - ``--model`` is forwarded only for an explicit, non-sentinel id;
           ``agy`` otherwise uses its own configured default.
         """
-        del output_last_message_path, resume_session_id, runtime_handle, reasoning_effort
+        del output_last_message_path, reasoning_effort
 
         command = [
             self._cli_path,
@@ -194,6 +194,9 @@ class AntigravityCLIRuntime(GeminiCLIRuntime):
             "--output-format",
             "stream-json",
         ]
+        session_id = resume_session_id or self._resolve_resume_session_id(runtime_handle)
+        if session_id:
+            command.extend(["--conversation", session_id])
         normalized_model = self._normalize_model(self._model)
         if normalized_model and normalized_model != _SENTINEL_MODEL:
             command.extend(["--model", normalized_model])
@@ -231,13 +234,14 @@ class AntigravityCLIRuntime(GeminiCLIRuntime):
         """Declare the Antigravity CLI runtime feature contract.
 
         ``agy -p --output-format stream-json`` exposes structured tool events.
-        Targeted resume is not yet wired here; recovery happens at the Ouroboros checkpoint/lineage layer.
+        Targeted resume uses the native ``--conversation`` option. Unsupported
+        CLI versions fail explicitly and are never retried as fresh sessions.
         Tool restrictions and the system prompt are composed into the user
         message by the inherited prompt builder rather than enforced natively.
         """
         return RuntimeCapabilities(
             skill_dispatch=True,
-            targeted_resume=False,
+            targeted_resume=True,
             structured_output=True,
             system_prompt_support=ParamSupport.TRANSLATED,
             tool_restriction_support=ParamSupport.TRANSLATED,
