@@ -30,6 +30,7 @@ from rich.console import Console
 from rich.markup import escape
 import typer
 
+from ouroboros.codex.home import resolve_codex_home
 from ouroboros.config.models import resolve_event_store_path
 from ouroboros.mcp.client.adapter import MCPClientAdapter
 from ouroboros.mcp.types import MCPServerConfig, TransportType
@@ -445,6 +446,27 @@ def _configured_launcher_probe_config(
         args=tuple(raw_args),
         env=dict(raw_env),
         timeout=float(timeout),
+    )
+
+
+def _inspect_configured_launcher() -> CheckResult:
+    """Inspect effective Codex config without opening a launcher transport."""
+    stage = "configured_launcher_inspection"
+    try:
+        config = _configured_launcher_probe_config(resolve_codex_home())
+    except (FileNotFoundError, KeyError):
+        return CheckResult(
+            stage, "warn", "Configured launcher entry not found; no launcher executed."
+        )
+    except (OSError, UnicodeError, TypeError, ValueError):
+        return CheckResult(
+            stage,
+            "fail",
+            "Configured launcher entry is unreadable or malformed; no launcher executed.",
+        )
+    summary = json.dumps(_redacted_server_config_summary(config), sort_keys=True)
+    return CheckResult(
+        stage, "pass", "Static launcher inspection only; no launcher executed: " + summary
     )
 
 
@@ -1014,6 +1036,13 @@ def register_doctor_command(app: typer.Typer) -> None:
             bool,
             typer.Option("--json", help="Emit machine-readable JSON to stdout."),
         ] = False,
+        inspect_configured_launcher: Annotated[
+            bool,
+            typer.Option(
+                "--inspect-configured-launcher",
+                help="Inspect effective Codex launcher config statically; never execute its command.",
+            ),
+        ] = False,
         probe_local_stdio: Annotated[
             bool,
             typer.Option(
@@ -1039,6 +1068,9 @@ def register_doctor_command(app: typer.Typer) -> None:
 
             # Opt-in local server startup and discovery probe
             ouroboros mcp doctor --probe-local-stdio
+
+            # Static configured launcher inspection, no launcher execution
+            ouroboros mcp doctor --inspect-configured-launcher
         """
         snapshot = None
         if machine_snapshot:
@@ -1047,6 +1079,8 @@ def register_doctor_command(app: typer.Typer) -> None:
             snapshot = collect_machine_snapshot()
         console = Console()
         results: list[CheckResult] = [fn() for fn in _ALL_CHECKS]
+        if inspect_configured_launcher:
+            results.append(_inspect_configured_launcher())
         if probe_local_stdio:
             results.extend(asyncio.run(_probe_local_stdio()))
 
@@ -1109,4 +1143,4 @@ __all__ = [
     "check_event_store",
     "check_pid_file",
     "register_doctor_command",
-]
+    ]
