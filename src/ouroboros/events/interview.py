@@ -44,7 +44,14 @@ def interview_response_recorded(
     question_preview: str,
     response_preview: str,
 ) -> BaseEvent:
-    """Create event when a user response is recorded."""
+    """Record a response preview and its exact supplied character count.
+
+    ``response_preview`` is the complete submitted answer at this boundary;
+    only its first 200 code points are retained as text. The count measures
+    submitted text, not physical keystrokes or independently verified human
+    authorship. Older events lack this count and cannot recover it from a
+    truncated preview.
+    """
     return BaseEvent(
         type="interview.response.recorded",
         aggregate_type="interview",
@@ -53,6 +60,7 @@ def interview_response_recorded(
             "round_number": round_number,
             "question_preview": question_preview[:200],
             "response_preview": response_preview[:200],
+            "response_chars": len(response_preview),
         },
     )
 
