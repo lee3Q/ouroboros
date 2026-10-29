@@ -503,7 +503,7 @@ def test_capsule_uses_typed_rejection_for_windows_workspace_capacity(monkeypatch
     fixed_workspace = r"C:\Users\developer\source\ouroboros\nested\deep\workspace-dir"
     monkeypatch.setattr(
         "ouroboros.orchestrator.ac_execution_capsule.expected_artifact_workspace_path_error",
-        lambda artifact, workspace: expected_artifact_workspace_path_error(
+        lambda artifact, _workspace: expected_artifact_workspace_path_error(
             artifact,
             fixed_workspace,
             platform="windows",
