@@ -653,7 +653,27 @@ def _cli_target_files(cwd: Path, symbol: str) -> _NotProven | tuple[tuple[str, R
     proven bytes (an executable that is not a Python script or module).
     """
     if symbol.startswith("-m "):
-        files = _module_files(cwd, symbol[3:])
+        dotted = symbol[3:]
+        files = _module_files(cwd, dotted)
+        # A src-layout candidate is not evidence that the selected interpreter
+        # imports it. Never add src to the launch path or promote it to tier A.
+        # Distinguish this known proof limitation from absent checkout code.
+        names = _names(cwd, "")
+        top = dotted.split(".")[0]
+        if (
+            names is not None
+            and top not in names
+            and f"{top}.py" not in names
+            and not _shadowed(names, top)
+        ):
+            src_files = _module_files(cwd / "src", dotted)
+            if not isinstance(src_files, _NotProven) and all(
+                isinstance(resolve_checkout_file(cwd, f"src/{relative}"), RegularFile)
+                for relative in src_files
+            ):
+                return _NotProven(
+                    "unprovable", f"{symbol}: checkout_src_module_requires_import_origin_proof"
+                )
     elif symbol.endswith(".py"):
         files = (symbol,)
     else:
@@ -1179,4 +1199,4 @@ __all__ = [
     "reap_check_process",
     "run_oracle_check",
     "valid_entry",
-]
+                         ]
