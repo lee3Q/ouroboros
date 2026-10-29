@@ -180,6 +180,9 @@ consensus:
 >
 > 오래 떠 있는 URL 기반 Ouroboros MCP 서버를 운영한다면 그 URL 항목을 `~/.codex/config.toml`에 두세요. `ouroboros setup --runtime codex`는 **기본적으로 그 항목을 보존합니다.** 지원되는 호스트에서 setup이 그 항목을 관리형 command-spawned 서버로 **교체하기를 의도적으로 원할 때만** `--mcp-mode stdio`를 쓰세요. 네이티브 Windows에서는 앱 서버 종료 위험 때문에 이 방식을 거절합니다. 대신 `--mcp-mode http`를 명시하고, 안내된 loopback MCP 서버를 직접 실행·관리하세요.
 
+HTTP 서버를 시작할 때 예상하지 못한 콘솔이 나타나면
+[빈 PowerShell 또는 Windows Terminal 창](#빈-powershell-또는-windows-terminal-창)을 보세요.
+
 ## 빠른 시작
 
 > 첫 실행 흐름 전체(인터뷰 → seed → 실행)는 **[Getting Started](../getting-started.md)**(영문)를 보세요.
@@ -397,6 +400,49 @@ uv run ouroboros run workflow --runtime codex --resume <session_id> ~/.ouroboros
 > 실무적으로: 손으로 쓴 seed에 높은 `ambiguity_score`를 박아도 `ouroboros run workflow`가 막지는 않습니다. 이 값은 **강제 차단 장치가 아니라 출처 기록(provenance)**입니다.
 
 ## 문제 해결
+
+### 빈 PowerShell 또는 Windows Terminal 창
+
+빈 창만으로 HTTP MCP 서버 시작에 실패했다고 판단할 수는 없습니다. 언제
+나타나는지 먼저 확인하세요. 서버가 작업을 받기 전에 시작 스크립트나 예약
+작업이 연 창은 MCP가 시작한 분리된 워커와 다른 실행 경로입니다
+([워커 콘솔 수정 #2523](https://github.com/Q00/ouroboros/pull/2523)).
+
+런처의 실행 파일과 인수를 확인하세요. 기본 터미널이 Windows Terminal이면
+`powershell.exe -WindowStyle Hidden`을 써도 창이 남을 수 있습니다
+([Windows Terminal #12464](https://github.com/microsoft/terminal/issues/12464)).
+Ouroboros setup은 사용자가 관리하는 시작 스크립트나 예약 작업을 만들거나
+고치지 않습니다. [HTTP 설정 동작](#명령-표면-command-surface)은 서버 시작을
+사용자에게 맡깁니다.
+
+서버를 하나 더 시작하기 전에 PowerShell에서 설정한 endpoint의 listener를
+확인하세요. 아래 읽기 전용 예시는 기본 포트를 사용합니다. URL의 포트가
+다르면 `$mcpPort`를 바꾸세요.
+
+```powershell
+$mcpPort = 8765
+$listeners = @(Get-NetTCPConnection -State Listen |
+    Where-Object LocalPort -eq $mcpPort)
+if ($listeners.Count -eq 0) {
+    "No TCP listener found on port $mcpPort."
+}
+$listeners | Select-Object LocalAddress, LocalPort, OwningProcess
+$listeners | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object {
+    Get-CimInstance Win32_Process -Filter "ProcessId = $_" |
+        Select-Object ProcessId, ParentProcessId, ExecutablePath, CommandLine
+}
+```
+
+프로세스의 명령줄을 서버 런처와 비교하세요. 포트가 열려 있다고 MCP 연결이
+정상이라는 뜻은 아닙니다. MCP 클라이언트에서 실제 tool call이 성공하는지도
+확인하세요. 런처가 stdout/stderr를 파일로 보낸다면 설정된 출력 파일에서
+시작 오류를 확인하세요. 빈 콘솔은 단순히 표시할 출력이 없어서일 수도 있습니다.
+
+해당 endpoint를 쓰는 서버가 없다면 HTTP setup이 안내한 명령을 foreground
+터미널에서 실행하고, 진단하는 동안 출력을 보세요. 재시작할 때는 확인한
+서버를 평소 관리하던 런처로 재시작하세요. 창을 숨기려고 프로세스 트리 전체를
+종료하지 마세요. 지속되는 background job은 MCP 서버가 종료된 뒤에도 살아
+있을 수 있습니다. 작업을 실제로 중단하려는 경우에만 job 취소 기능을 쓰세요.
 
 ### Codex CLI를 못 찾을 때
 
