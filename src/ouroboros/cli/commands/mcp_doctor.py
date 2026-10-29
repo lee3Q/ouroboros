@@ -15,13 +15,16 @@ import asyncio
 from dataclasses import asdict, dataclass
 import importlib.metadata
 import json
+import math
 import os
 from pathlib import Path
 import platform
+import re
 import shlex
 import sys
 import tempfile
-from typing import Annotated, Literal
+import tomllib
+from typing import Annotated, Any, Literal
 
 from rich.console import Console
 from rich.markup import escape
@@ -351,6 +354,179 @@ async def _probe_local_stdio() -> list[CheckResult]:
                 "Resolve local stdio teardown before rerunning the probe.",
             )
         )
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Effective Codex configured-launcher resolution, redaction, and fixture probe
+# ---------------------------------------------------------------------------
+
+_SECRET_CONFIG_KEY_PATTERN = re.compile(
+    r"api[_-]?key|access[_-]?token|auth[_-]?token|authorization|client[_-]?secret"
+    r"|password|passwd|secret|token",
+    re.IGNORECASE,
+)
+_REDACTED_CONFIG_VALUE = "[redacted]"
+
+_CONFIGURED_LAUNCHER_STAGE_RESOLUTION = "configured_launcher_resolution"
+_CONFIGURED_LAUNCHER_STAGE_CLEANUP = "configured_launcher_cleanup"
+
+
+def _redact_config_value(key: str, value: str) -> str:
+    """Mask secret-valued config fields before any serialization or message."""
+    return _REDACTED_CONFIG_VALUE if _SECRET_CONFIG_KEY_PATTERN.search(key) else value
+
+
+def _redacted_environment(env: dict[str, str]) -> dict[str, str]:
+    return {key: _redact_config_value(key, value) for key, value in env.items()}
+
+
+def _redacted_server_config_summary(config: MCPServerConfig) -> dict[str, Any]:
+    """Omit all caller-controlled launcher values from diagnostic output."""
+    return {
+        "transport": "stdio",
+        "command": "[omitted]",
+        "args": "[omitted]",
+        "env": "[omitted]",
+        "argument_count": len(config.args or ()),
+        "environment_count": len(config.env or {}),
+    }
+
+
+def _read_codex_mcp_server(codex_home: Path, server_name: str) -> dict[str, Any]:
+    """Read one mcp_servers entry from the effective Codex config.toml.
+
+    Raises FileNotFoundError when no config.toml exists, TOMLDecodeError for
+    malformed TOML, KeyError when the entry is absent, and ValueError when the
+    entry cannot launch a stdio server.
+    """
+    config_path = codex_home / "config.toml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"no config.toml under {codex_home}")
+    data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    servers = data.get("mcp_servers")
+    if not isinstance(servers, dict) or server_name not in servers:
+        raise KeyError(server_name)
+    entry = servers[server_name]
+    if not isinstance(entry, dict) or not entry.get("command"):
+        raise ValueError(f"mcp_servers.{server_name} has no command")
+    return entry
+
+
+def _configured_launcher_probe_config(
+    codex_home: Path, server_name: str = "ouroboros"
+) -> MCPServerConfig:
+    """Build a probe config from the effective configured launcher entry."""
+    entry = _read_codex_mcp_server(codex_home, server_name)
+    command = entry["command"]
+    raw_env = entry.get("env", {})
+    raw_args = entry.get("args", [])
+    if not isinstance(command, str) or not command.strip():
+        raise ValueError("Configured launcher command must be a nonempty string")
+    if not isinstance(raw_args, list) or any(not isinstance(arg, str) for arg in raw_args):
+        raise ValueError("Configured launcher args must be a list of strings")
+    if not isinstance(raw_env, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str) for key, value in raw_env.items()
+    ):
+        raise ValueError("Configured launcher env must map strings to strings")
+    timeout = entry.get("startup_timeout_sec", entry.get("timeout", 15.0))
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        raise ValueError("Configured launcher timeout must be a finite positive number")
+    try:
+        timeout = float(timeout)
+    except OverflowError as exc:
+        raise ValueError("Configured launcher timeout is out of range") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("Configured launcher timeout must be a finite positive number")
+    return MCPServerConfig(
+        name=f"configured-{server_name}",
+        transport=TransportType.STDIO,
+        command=command,
+        args=tuple(raw_args),
+        env=dict(raw_env),
+        timeout=float(timeout),
+    )
+
+
+def _remap_local_stdio_stage_names(results: list[CheckResult], prefix: str) -> list[CheckResult]:
+    # No arbitrary adapter/server output is copied, even on success: stderr,
+    # exception strings, protocol versions and tool names may echo secrets.
+    stages = {
+        _LOCAL_STDIO_STAGE_STARTUP: "startup_transport",
+        _LOCAL_STDIO_STAGE_PROTOCOL: "protocol_discovery",
+        _LOCAL_STDIO_STAGE_TOOLS: "tool_recognition",
+    }
+    return [
+        CheckResult(
+            prefix + stages.get(result.name, "unknown"),
+            result.status if result.status in {"pass", "warn", "fail"} else "fail",
+            "Configured launcher stage passed."
+            if result.status == "pass"
+            else "Configured launcher stage did not pass; raw diagnostics omitted.",
+            "Inspect launcher diagnostics locally; raw output is not included.",
+        )
+        for result in results
+    ]
+
+
+async def _probe_configured_launcher(
+    codex_home: Path, server_name: str = "ouroboros", *, fixture_probe: bool = False
+) -> list[CheckResult]:
+    """Fixture-only candidate, not wired into the CLI or CODEX_HOME resolution.
+
+    The explicit flag guards against accidental execution by a caller that
+    only requests config inspection. It is not an execution sandbox: callers
+    must supply a controlled fixture. All free-form config and adapter values
+    are omitted from returned diagnostics. Real launcher integration is pending.
+    """
+    stage = _CONFIGURED_LAUNCHER_STAGE_RESOLUTION
+    if not fixture_probe:
+        return [CheckResult(stage, "warn", "Fixture execution was not enabled; probe not run.")]
+    try:
+        config = _configured_launcher_probe_config(codex_home, server_name)
+    except (FileNotFoundError, KeyError):
+        return [CheckResult(stage, "warn", "Configured launcher entry not found.")]
+    except (OSError, tomllib.TOMLDecodeError, TypeError, ValueError):
+        return [CheckResult(stage, "fail", "Configured launcher entry is unreadable or malformed.")]
+    summary = json.dumps(_redacted_server_config_summary(config), sort_keys=True)
+    results = [CheckResult(stage, "pass", "Resolved fixture launcher: " + summary)]
+    adapter = None
+    try:
+        adapter = MCPClientAdapter(max_retries=1)
+        probe_results = await _collect_local_stdio_results(adapter, config)
+        results.extend(_remap_local_stdio_stage_names(probe_results, "configured_stdio_"))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        results.append(
+            CheckResult(
+                "configured_stdio_startup_transport",
+                "fail",
+                "Fixture launcher probe failed; raw diagnostics omitted.",
+            )
+        )
+    finally:
+        if adapter is not None:
+            try:
+                cleanup = await adapter.disconnect()
+                if cleanup.is_err:
+                    results.append(
+                        CheckResult(
+                            _CONFIGURED_LAUNCHER_STAGE_CLEANUP,
+                            "fail",
+                            "Fixture launcher teardown failed; raw diagnostics omitted.",
+                        )
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                results.append(
+                    CheckResult(
+                        _CONFIGURED_LAUNCHER_STAGE_CLEANUP,
+                        "fail",
+                        "Fixture launcher teardown failed; raw diagnostics omitted.",
+                    )
+                )
     return results
 
 
