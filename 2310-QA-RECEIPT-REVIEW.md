@@ -33,3 +33,16 @@ failure, repeated evaluations, missing IDs, private-text exclusion and absence
 of fabricated orchestrator session events. Existing QA/parser/schema and MCP
 adapter selections are also run. Fork only; Codex final judgment, no upstream
 merge, formal review or release.
+
+## Follow-up: direct/plugin input boundary
+
+Before prompt construction, logging, provider selection or plugin handoff,
+reject non-string/non-empty quality_bar, unsupported artifact_type, non-string
+optional reference/seed_content, and supplied empty/non-string qa_session_id.
+No coercion is introduced. Valid strings are preserved verbatim and all six
+advertised artifact types remain valid. Empty artifact/reference/seed_content
+remain supported. Malformed session IDs cannot become aggregate identifiers.
+24 malformed direct/plugin cases reproduced 22 failures before this change;
+6 valid plugin compatibility cases preserve exact values. These checks protect
+handler callers that bypass external schema validation. They do not relax host
+inputSchema validation or accept serialized numeric/history strings.
