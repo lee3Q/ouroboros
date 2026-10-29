@@ -130,7 +130,7 @@ class OutcomeRecord:
             raise ValueError("probe_id must be a non-empty string")
         if not isinstance(self.tree_id, str) or not self.tree_id:
             raise ValueError("tree_id must be a non-empty string")
-        if isinstance(self.repeat, bool) or self.repeat not in REPEATS:
+        if type(self.repeat) is not int or self.repeat not in REPEATS:
             raise ValueError(f"repeat must be one of {REPEATS}, got {self.repeat!r}")
         object.__setattr__(self, "status", ProbeStatus(self.status))
         if not isinstance(self.fields, Mapping):
