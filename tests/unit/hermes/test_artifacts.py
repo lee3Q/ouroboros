@@ -1746,3 +1746,106 @@ class TestInstallHermesSkills:
         assert not real_workspace.joinpath(
             ".hermes", "skills", "autonomous-ai-agents", "ouroboros", "run"
         ).exists()
+
+
+class TestRenameNoReplaceDegradation:
+    """#2294 finding 5: degrade like the Codex boundary when no-replace is unsupported."""
+
+    @staticmethod
+    def _fake_libc(error_number: int | None) -> object:
+        import ctypes as _ctypes
+
+        class _FakeRenameat2:
+            argtypes = None
+            restype = None
+
+            def __call__(self, *args: object) -> int:
+                if error_number is not None:
+                    _ctypes.set_errno(error_number)
+                    return 1
+                return 0
+
+        class _FakeLibc:
+            renameat2 = _FakeRenameat2()
+
+        return _FakeLibc()
+
+    def test_degrades_to_link_fallback_on_unsupported_flag(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        import ctypes
+        import errno
+
+        from ouroboros.hermes import artifacts
+
+        source = tmp_path / "new"
+        source.write_text("fresh\n", encoding="utf-8")
+        target = tmp_path / "ouroboros"
+        monkeypatch.setattr(ctypes, "CDLL", lambda *_args, **_kwargs: self._fake_libc(errno.EINVAL))
+        monkeypatch.setattr(artifacts.sys, "platform", "linux")
+        artifacts._rename_no_replace(source, target)
+        assert target.read_text(encoding="utf-8") == "fresh\n"
+        assert not source.exists()
+
+    def test_degrades_to_fallback_when_primitive_missing(self, tmp_path: Path, monkeypatch) -> None:
+        import ctypes
+
+        from ouroboros.hermes import artifacts
+
+        class _NoPrimitive:
+            pass
+
+        source = tmp_path / "new"
+        source.write_text("fresh\n", encoding="utf-8")
+        target = tmp_path / "ouroboros"
+        monkeypatch.setattr(ctypes, "CDLL", lambda *_args, **_kwargs: _NoPrimitive())
+        monkeypatch.setattr(artifacts.sys, "platform", "linux")
+        artifacts._rename_no_replace(source, target)
+        assert target.read_text(encoding="utf-8") == "fresh\n"
+        assert not source.exists()
+
+    def test_degradation_refuses_occupied_target(self, tmp_path: Path, monkeypatch) -> None:
+        import ctypes
+        import errno
+
+        from ouroboros.hermes import artifacts
+
+        source = tmp_path / "new"
+        source.write_text("fresh\n", encoding="utf-8")
+        target = tmp_path / "ouroboros"
+        target.write_text("mine\n", encoding="utf-8")
+        monkeypatch.setattr(ctypes, "CDLL", lambda *_args, **_kwargs: self._fake_libc(errno.EINVAL))
+        monkeypatch.setattr(artifacts.sys, "platform", "linux")
+        with pytest.raises(FileExistsError):
+            artifacts._rename_no_replace(source, target)
+        assert target.read_text(encoding="utf-8") == "mine\n"
+
+    def test_unrelated_primitive_error_still_raises(self, tmp_path: Path, monkeypatch) -> None:
+        import ctypes
+        import errno
+
+        from ouroboros.hermes import artifacts
+
+        source = tmp_path / "new"
+        source.write_text("fresh\n", encoding="utf-8")
+        target = tmp_path / "ouroboros"
+        monkeypatch.setattr(ctypes, "CDLL", lambda *_args, **_kwargs: self._fake_libc(errno.EPERM))
+        monkeypatch.setattr(artifacts.sys, "platform", "linux")
+        with pytest.raises(OSError):
+            artifacts._rename_no_replace(source, target)
+
+    def test_degrades_directory_source_via_reservation(self, tmp_path: Path, monkeypatch) -> None:
+        import ctypes
+        import errno
+
+        from ouroboros.hermes import artifacts
+
+        source = tmp_path / "newdir"
+        source.mkdir()
+        source.joinpath("generation.txt").write_text("fresh\n", encoding="utf-8")
+        target = tmp_path / "ouroboros"
+        monkeypatch.setattr(ctypes, "CDLL", lambda *_args, **_kwargs: self._fake_libc(errno.EINVAL))
+        monkeypatch.setattr(artifacts.sys, "platform", "linux")
+        artifacts._rename_no_replace(source, target)
+        assert target.joinpath("generation.txt").read_text(encoding="utf-8") == "fresh\n"
+        assert not source.exists()
