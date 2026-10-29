@@ -398,10 +398,12 @@ class GjcRuntime:
             # stops iterating at the terminal message (or never closes the
             # generator) cannot leave the session running. Question turns and
             # coordinator errors keep the session alive for resume.
-            session_stopped = True
             try:
                 await client.stop_session(session_id)
+                session_stopped = True
             except GjcCoordinatorError:
+                # Keep cleanup pending: the shielded finally makes one bounded
+                # retry if the terminal stop did not acknowledge completion.
                 pass
             if not turn.succeeded:
                 yield AgentMessage(
