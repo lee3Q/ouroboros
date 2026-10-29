@@ -21,3 +21,7 @@ This does not port the V1 bridge to V2 `setup` / effect APIs, enable V2 child Ta
 The V2 contract was checked against the official migration/server-plugin documentation and the published @opencode/plugin 2.2.0 types. This patch deliberately does not add a fake setup export or silently register an incompatible plugin.
 
 Sources: https://opencode.ai/v2/docs/build/plugins/migrate-v1/ and https://opencode.ai/v2/docs/build/plugins/server/ .
+
+## Argon feedback follow-up
+
+Static feedback on the public exact patch identified valid non-object JSON config values as a best-effort cleanup gap. Added object guards to both cleanup paths and public/MCP uninstall scans; 15 cases cover null, list, string, number and boolean config values without crashes or rewrites. Local selected suites now 575 passed, 4 skipped. Relative bridge directory entries remain intentionally supported. The suggested dry-run artifact ordering defect was checked against the full source and rejected: directory handling precedes config handling and removes the directory tree, not only the V1 filename.
