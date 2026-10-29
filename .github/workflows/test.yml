@@ -45,7 +45,7 @@ jobs:
           assert mcp is not None
           assert version("claude-agent-sdk") == "0.2.165"
           assert version("anthropic") == "1.13.0"
-          assert version("mcp").split(".", maxsplit=1)[0] == "1"
+          assert version("mcp").split(".", maxsplit=1)[0] == "2"
           PY
           uv pip check
 
