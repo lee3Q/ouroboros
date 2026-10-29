@@ -314,6 +314,45 @@ class SessionStatusHandler:
             result = await self._session_repo.reconstruct_session(session_id)
 
             if result.is_err:
+                # QA receipts live in their own aggregate. Do not manufacture
+                # orchestrator lifecycle or Seed acceptance from a QA score.
+                receipts = await self._event_store.replay("qa", session_id)
+                completed = [event for event in receipts if event.type == "qa.evaluation.completed"]
+                if completed:
+                    receipt = completed[-1]
+                    data = receipt.data
+                    meta = {
+                        key: data[key]
+                        for key in (
+                            "iteration",
+                            "score",
+                            "verdict",
+                            "loop_action",
+                            "pass_threshold",
+                            "passed",
+                        )
+                        if key in data
+                    }
+                    meta.update(
+                        session_id=session_id,
+                        session_kind="qa",
+                        status="evaluated",
+                        is_active=False,
+                        receipt_persisted=True,
+                    )
+                    text = (
+                        f"QA Session: {session_id}\nStatus: evaluated\nTerminal: True\n"
+                        f"Score: {meta.get('score')}\nVerdict: {meta.get('verdict')}\n"
+                        f"Passed: {meta.get('passed')}\n"
+                        "This receipt is a QA evaluation, not Seed execution or acceptance."
+                    )
+                    return Result.ok(
+                        MCPToolResult(
+                            content=(MCPContentItem(type=ContentType.TEXT, text=text),),
+                            is_error=False,
+                            meta=meta,
+                        )
+                    )
                 error = result.error
                 return Result.err(
                     MCPToolError(
