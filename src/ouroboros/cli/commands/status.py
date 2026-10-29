@@ -50,6 +50,28 @@ app = typer.Typer(
 )
 
 
+@app.command("ambiguity-gate")
+def ambiguity_gate(
+    seed_dir: Annotated[
+        Path,
+        typer.Option("--seed-dir", help="Local Seed directory (flat files only)."),
+    ] = Path(".ouroboros/seeds"),
+) -> None:
+    """Summarize recorded gate overrides in local Seeds without changing them."""
+    from ouroboros.cli.commands.gate_status import summarize_gate_decisions
+
+    try:
+        summary = summarize_gate_decisions(seed_dir)
+    except OSError as error:
+        print_error(f"Cannot read Seed directory: {error}")
+        raise typer.Exit(1) from error
+    typer.echo(f"Ambiguity gate: {seed_dir} (flat files, unique seed IDs)")
+    typer.echo(summary.render(), nl=False)
+    typer.echo(
+        "Unknown history and unreadable files are excluded from the rate. No telemetry sent."
+    )
+
+
 def _format_auto_status(state) -> str:
     """Render a unified auto + ralph status block as plain text.
 
