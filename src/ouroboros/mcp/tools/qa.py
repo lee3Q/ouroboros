@@ -843,6 +843,29 @@ class QAHandler:
                 "iteration_entry": iteration_entry,
             }
 
+            # A QA verdict is not a Seed execution session. Persist only its
+            # bounded outcome receipt, never the artifact, prompt or reasoning.
+            meta["receipt_persisted"] = False
+            if self.event_store is not None:
+                from ouroboros.events.base import BaseEvent
+
+                await self.event_store.append(
+                    BaseEvent(
+                        type="qa.evaluation.completed",
+                        aggregate_type="qa",
+                        aggregate_id=qa_session_id,
+                        data={
+                            "iteration": iteration,
+                            "score": verdict.score,
+                            "verdict": verdict.verdict,
+                            "loop_action": loop_action,
+                            "pass_threshold": pass_threshold,
+                            "passed": verdict.score >= pass_threshold,
+                        },
+                    )
+                )
+                meta["receipt_persisted"] = True
+
             return Result.ok(
                 MCPToolResult(
                     content=(MCPContentItem(type=ContentType.TEXT, text=result_text),),
