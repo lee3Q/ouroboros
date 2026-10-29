@@ -60,3 +60,13 @@ def test_missing_directory_fails_instead_of_reporting_zero(tmp_path: Path) -> No
     result = CliRunner().invoke(app, ["ambiguity-gate", "--seed-dir", str(tmp_path / "missing")])
     assert result.exit_code == 1
     assert "Cannot read Seed directory" in result.output
+
+
+def test_coverage_and_symlinks_do_not_read_outside_directory(tmp_path: Path) -> None:
+    seed(tmp_path, "known.yaml", "known", gate_forced=True)
+    seed(tmp_path, "old.yaml", "old")
+    (tmp_path / "link.yaml").symlink_to(tmp_path / "known.yaml")
+    result = summarize_gate_decisions(tmp_path)
+    assert result.unreadable == 1
+    assert "Unique Seed IDs: 2" in result.render()
+    assert "Recorded-decision coverage: 50.0%" in result.render()
