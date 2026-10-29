@@ -183,3 +183,52 @@ async def test_a_bare_executable_target_is_not_provable(tmp_path: Path) -> None:
     admission = await admit_check_package(_cli_package(base, "tool"), base)
     assert _oracle_result(admission.checks[0])["resolve"] == "unprovable"
     assert admission.check_tiers == {"oracle_1": "U"}
+
+
+@pytest.mark.parametrize("symbol", ["-m pkg", "-m pkg.mod", "-m tool"])
+def test_src_layout_code_reports_import_origin_proof_gap(tmp_path: Path, symbol: str) -> None:
+    root = _repo(
+        tmp_path / "repo",
+        {
+            "src/pkg/__init__.py": "",
+            "src/pkg/__main__.py": RIGHT,
+            "src/pkg/mod.py": RIGHT,
+            "src/tool.py": RIGHT,
+        },
+    )
+    result = oracle_run._cli_target_files(root, symbol)
+    assert isinstance(result, oracle_run._NotProven)
+    assert result.resolve == "unprovable"
+    assert result.reason == f"{symbol}: checkout_src_module_requires_import_origin_proof"
+
+
+@pytest.mark.parametrize("layout", ["absent", "namespace", "outside_link", "shadowed"])
+def test_src_diagnostic_requires_regular_checkout_candidate(tmp_path: Path, layout: str) -> None:
+    files = {} if layout == "absent" else {"src/pkg/mod.py": RIGHT}
+    if layout != "namespace" and layout != "absent":
+        files["src/pkg/__init__.py"] = ""
+    if layout == "shadowed":
+        files["src/pkg/mod.so"] = ""
+    root = _repo(tmp_path / "repo", files or {"README.md": "no module"})
+    if layout == "outside_link":
+        outside = _repo(tmp_path / "outside", {"mod.py": RIGHT})
+        (root / "src/pkg/mod.py").unlink()
+        (root / "src/pkg/mod.py").symlink_to(outside / "mod.py")
+    result = oracle_run._cli_target_files(root, "-m pkg.mod")
+    assert isinstance(result, oracle_run._NotProven)
+    assert "checkout_src_module_requires_import_origin_proof" not in result.reason
+
+
+def test_root_module_proof_has_priority_over_src_layout(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "repo", {"tool.py": WRONG, "src/tool.py": RIGHT})
+    result = oracle_run._cli_target_files(root, "-m tool")
+    assert not isinstance(result, oracle_run._NotProven)
+    assert [path for path, _ in result] == ["tool.py"]
+    assert result[0][1].data == WRONG.encode()
+
+
+async def test_src_layout_never_becomes_tier_a_without_import_origin_proof(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "repo", {"src/pkg/__init__.py": "", "src/pkg/mod.py": RIGHT})
+    admission = await admit_check_package(_cli_package(root, "-m pkg.mod"), root)
+    assert _oracle_result(admission.checks[0])["resolve"] == "unprovable"
+    assert admission.check_tiers == {"oracle_1": "U"}
