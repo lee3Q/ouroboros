@@ -270,6 +270,7 @@ class InterviewState(BaseModel):
     reference_cues: tuple[ReferenceCue, ...] = Field(default_factory=tuple)
     reference_resolutions: tuple[ReferenceContrastResolution, ...] = Field(default_factory=tuple)
     pending_confused_terms: tuple[str, ...] = Field(default_factory=tuple)
+    pending_question_batch: dict[str, Any] | None = None
     requirement_input_revision: int = Field(default=0, ge=0)
     requirement_distillation: RequirementDistillation | None = None
 
@@ -1022,6 +1023,10 @@ class InterviewEngine:
         self, state: InterviewState
     ) -> Result[str, ProviderError | ValidationError]:
         """Generate the next question based on current state."""
+        if state.pending_question_batch:
+            return Result.err(
+                ValidationError("Answer the pending question batch first", field="question_batch")
+            )
         prepared_result = self.prepare_next_question(state)
         if prepared_result.is_err:
             return Result.err(prepared_result.error)
@@ -1161,6 +1166,12 @@ class InterviewEngine:
         Returns:
             Result containing updated state or ValidationError.
         """
+        if state.pending_question_batch:
+            return Result.err(
+                ValidationError(
+                    "Answer through the pending question batch route", field="question_batch"
+                )
+            )
         # Validate user response with security limits
         is_valid, error_msg = InputValidator.validate_user_response(user_response)
         if not is_valid:
