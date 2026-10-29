@@ -119,3 +119,9 @@ def test_unknown_status_is_refused() -> None:
 def test_every_documented_field_is_accepted() -> None:
     fields = dict.fromkeys(OUTCOME_FIELDS, "x")
     assert set(_record(**fields).fields) == OUTCOME_FIELDS
+
+
+@pytest.mark.parametrize("repeat", [0.0, 1.0])
+def test_repeat_identity_rejects_float_aliases(repeat: float) -> None:
+    with pytest.raises(ValueError, match="repeat"):
+        OutcomeRecord("p1", "c1", repeat, ProbeStatus.RETURNED, {"value": 1})
