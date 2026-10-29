@@ -568,3 +568,28 @@ class TestPluginRegistrationDetection:
         )
         context = self._run(script, tmp_path / "home", "hello")
         assert "/ouroboros:welcome" in context
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        '{"mcpServers":{"not-ouroboros":{"command":"other"}}}',
+        '{"note":"install ouroboros later"}',
+        "not json ouroboros",
+        '{"mcpServers":["ouroboros"]}',
+    ],
+)
+def test_unrelated_legacy_text_is_not_registration(tmp_path, document):
+    folder = tmp_path / ".claude"
+    folder.mkdir()
+    (folder / "mcp.json").write_text(document)
+    with patch.object(_mod.Path, "home", return_value=tmp_path):
+        assert _mod._user_registered_mcp() is False
+
+
+def test_exact_legacy_server_key_remains_registered(tmp_path):
+    folder = tmp_path / ".claude"
+    folder.mkdir()
+    (folder / "mcp.json").write_text('{"mcpServers":{"ouroboros":{}}}')
+    with patch.object(_mod.Path, "home", return_value=tmp_path):
+        assert _mod._user_registered_mcp() is True
