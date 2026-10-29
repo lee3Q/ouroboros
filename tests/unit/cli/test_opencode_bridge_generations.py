@@ -175,3 +175,33 @@ def test_public_uninstall_preview_finds_v2_config_without_plugin_directory(tmp_p
     assert result.exit_code == 0, result.output
     assert "OpenCode bridge plugin entry" in result.output
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("value", [None, [], "text", 123, True])
+@pytest.mark.parametrize("mode", ["uninstall", "switch", "preview"])
+def test_non_object_config_is_best_effort_and_byte_preserving(
+    tmp_path: Path, value: object, mode: str
+) -> None:
+    from typer.testing import CliRunner
+
+    from ouroboros.cli.commands.uninstall import _remove_opencode_mcp, app
+
+    path = tmp_path / "opencode.json"
+    path.write_text(json.dumps(value))
+    original = path.read_bytes()
+    owner = "setup" if mode == "switch" else "uninstall"
+    with (
+        patch("pathlib.Path.home", return_value=tmp_path),
+        patch("pathlib.Path.cwd", return_value=tmp_path),
+        patch(f"ouroboros.cli.commands.{owner}.opencode_config_dir", return_value=tmp_path),
+        patch(f"ouroboros.cli.commands.{owner}.find_opencode_config", return_value=path),
+    ):
+        if mode == "switch":
+            _cleanup_plugin_artifacts()
+        elif mode == "uninstall":
+            assert not _remove_opencode_bridge_plugin(dry_run=False)
+            assert not _remove_opencode_mcp(dry_run=False)
+        else:
+            result = CliRunner().invoke(app, ["--dry-run"])
+            assert result.exit_code == 0, result.output
+    assert path.read_bytes() == original
