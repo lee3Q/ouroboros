@@ -117,7 +117,9 @@ def _plugin_evolve_options_error(
             "checkpoint_attempted_ac_ids",
             "recover_expired_claim",
         )
-        if arguments.get(name, _EVOLVE_HANDLER_DEFAULTS[name]) != _EVOLVE_HANDLER_DEFAULTS[name]
+        if type(arguments.get(name, _EVOLVE_HANDLER_DEFAULTS[name]))
+        is not type(_EVOLVE_HANDLER_DEFAULTS[name])
+        or arguments.get(name, _EVOLVE_HANDLER_DEFAULTS[name]) != _EVOLVE_HANDLER_DEFAULTS[name]
     ]
     if unsupported:
         return f"{', '.join(unsupported)} require the in-process evolve runtime"
@@ -1824,4 +1826,4 @@ class StartEvolveStepHandler:
                 meta=meta,
                 structured_content=dict(meta),
             )
-        )
+                                    )
