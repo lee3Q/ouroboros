@@ -167,7 +167,9 @@ def _user_registered_mcp() -> bool:
         mcp_path = Path.home() / ".claude" / "mcp.json"
         if not mcp_path.exists():
             return False
-        return "ouroboros" in mcp_path.read_text()
+        document = json.loads(mcp_path.read_text())
+        servers = document.get("mcpServers") if isinstance(document, dict) else None
+        return isinstance(servers, dict) and "ouroboros" in servers
     except Exception:
         return False
 
