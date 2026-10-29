@@ -685,7 +685,7 @@ class QAHandler:
             )
 
         quality_bar = arguments.get("quality_bar")
-        if not quality_bar:
+        if not isinstance(quality_bar, str) or not quality_bar.strip():
             return Result.err(
                 MCPToolError(
                     "quality_bar is required",
@@ -694,6 +694,25 @@ class QAHandler:
             )
 
         artifact_type = arguments.get("artifact_type", "code")
+        if not isinstance(artifact_type, str) or artifact_type not in VALID_ARTIFACT_TYPES:
+            return Result.err(
+                MCPToolError(
+                    "artifact_type must be a supported artifact type", tool_name="ouroboros_qa"
+                )
+            )
+        for name in ("reference", "seed_content"):
+            value = arguments.get(name)
+            if value is not None and not isinstance(value, str):
+                return Result.err(
+                    MCPToolError(f"{name} must be a string when supplied", tool_name="ouroboros_qa")
+                )
+        supplied_session_id = arguments.get("qa_session_id")
+        if "qa_session_id" in arguments and (
+            not isinstance(supplied_session_id, str) or not supplied_session_id.strip()
+        ):
+            return Result.err(
+                MCPToolError("qa_session_id must be a non-empty string", tool_name="ouroboros_qa")
+            )
         reference = arguments.get("reference")
         threshold = arguments.get("pass_threshold", DEFAULT_PASS_THRESHOLD)
         if not _is_finite_number(threshold) or not 0.0 <= threshold <= 1.0:
