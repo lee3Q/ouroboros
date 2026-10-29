@@ -496,11 +496,16 @@ def test_capsule_uses_typed_rejection_for_windows_workspace_capacity(monkeypatch
         execution_context_id="execution-windows-path-limit",
         retry_attempt=0,
     )
+    # The production caller resolves the workspace through os.path.realpath,
+    # which prepends the test process CWD to a Windows-style path on POSIX.
+    # Pin the workspace so the UTF-16 unit count exceeds 260 deterministically,
+    # independent of the checkout path length.
+    fixed_workspace = r"C:\Users\developer\source\ouroboros\nested\deep\workspace-dir"
     monkeypatch.setattr(
         "ouroboros.orchestrator.ac_execution_capsule.expected_artifact_workspace_path_error",
         lambda artifact, workspace: expected_artifact_workspace_path_error(
             artifact,
-            workspace,
+            fixed_workspace,
             platform="windows",
             path_capacity=260,
         ),
