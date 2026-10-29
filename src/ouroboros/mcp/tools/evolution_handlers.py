@@ -1826,4 +1826,6 @@ class StartEvolveStepHandler:
                 meta=meta,
                 structured_content=dict(meta),
             )
-                                    )
+        )
+
+# End of evolution tool handlers.
