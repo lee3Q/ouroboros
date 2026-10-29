@@ -94,3 +94,18 @@ async def test_plugin_keeps_default_delegation(
     assert result.is_ok
     assert result.value.meta["_subagent"]["context"]["lineage_id"] == "plugin-lineage"
     assert await store.count_events() > 0
+
+
+@pytest.mark.parametrize("handler_type", HANDLERS)
+@pytest.mark.parametrize("value", [0, 0.0, None, "", [], {}])
+async def test_plugin_does_not_silently_treat_numeric_recovery_as_false(
+    handler_type: type[EvolveStepHandler] | type[StartEvolveStepHandler],
+    store: EventStore,
+    value: Any,
+) -> None:
+    handler = handler_type(
+        event_store=store, agent_runtime_backend="opencode", opencode_mode="plugin"
+    )
+    result = await handler.handle({"lineage_id": "plugin-lineage", "recover_expired_claim": value})
+    assert result.is_err
+    assert await store.count_events() == 0
