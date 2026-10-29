@@ -19,3 +19,7 @@ Base: c72d0b2d73ee5786f5abf0a56371bb9f096c00c6. Python 3.14.9; PATH starts with 
 ## Still open
 
 This does not resolve the selected interpreter's editable-install/import origin or enable execution of src-layout modules. It is a bounded diagnostic fix, not complete #2574 implementation or proof of the reported pytest benchmark case. Native Windows and remote CI were not run. Automatic `src` path insertion is deliberately excluded.
+
+## Argon feedback follow-up
+
+Added a real admission-path assertion that the specific diagnostic reaches CheckExecution.output_tail. Structured OracleResult case details deliberately remain empty for unresolved targets under the existing schema. The suggestion that an existing root module triggers the src probe was rejected after checking the root-name guard. No new production change. Local focused CLI-launch suite: 23 passed, 3 skipped. Full selected suites and exact published follow-up remain to be rerun after transport.
