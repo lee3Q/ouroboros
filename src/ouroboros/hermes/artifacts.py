@@ -167,20 +167,99 @@ def _detached_reclamation_manifest(manifest: Path) -> Path:
     return manifest.with_name(manifest.name + ".detached")
 
 
+_RENAME_FLAG_UNSUPPORTED_ERRNOS = frozenset({errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP})
+
+
+def _release_directory_reservation(reservation_fd: int, target: Path) -> None:
+    """Remove a failed publication's reservation, and nothing else.
+
+    A writer may remove or rename the reservation and put their own directory
+    at the same path before publication fails. Descriptor liveness alone
+    cannot prove pathname ownership: cleanup requires both a live descriptor
+    and a current pathname with the same device/inode identity, and a removed
+    reservation (zero links) is left alone. Mirrors the Codex publication
+    boundary contract.
+    """
+    try:
+        reservation_stat = os.fstat(reservation_fd)
+        target_stat = os.stat(target, follow_symlinks=False)
+    except OSError:
+        return
+    if reservation_stat.st_nlink <= 0:
+        return
+    if (reservation_stat.st_dev, reservation_stat.st_ino) != (
+        target_stat.st_dev,
+        target_stat.st_ino,
+    ):
+        return
+    try:
+        os.rmdir(target)
+    except OSError:
+        pass
+
+
+def _rename_no_replace_fallback(source: Path, target: Path) -> None:
+    """Rename without replacing where no atomic no-replace primitive is available.
+
+    Mirrors the Codex publication contract: files publish with ``os.link``
+    (atomic ``EEXIST`` on an occupied target); directories reserve the name
+    with ``os.mkdir`` and consume the reservation with POSIX ``rename``. The
+    reservation cleanup only removes a directory that is still the exact
+    reserved inode.
+    """
+    if source.is_dir() and not source.is_symlink():
+        os.mkdir(target)
+        try:
+            reservation = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+        except BaseException:
+            try:
+                os.rmdir(target)
+            except OSError:
+                pass
+            raise
+        try:
+            os.rename(source, target)
+        except BaseException:
+            _release_directory_reservation(reservation, target)
+            raise
+        finally:
+            try:
+                os.close(reservation)
+            except OSError:
+                pass
+        return
+
+    os.link(source, target, follow_symlinks=False)
+    try:
+        source.unlink()
+    except OSError:
+        pass
+
+
 def _rename_no_replace(source: Path, target: Path) -> None:
-    """Atomically rename while refusing an occupied destination."""
+    """Atomically rename while refusing an occupied destination.
+
+    Degrades to the reservation/link fallback when the platform has no
+    no-replace primitive or the kernel/filesystem rejects the flag, matching
+    the Codex publication boundary.
+    """
     # Keep fault-injection seams used by callers/tests, while production uses
     # the platform's no-replace primitive at the ownership boundary.
     if getattr(os.replace, "__module__", "posix") not in {"posix", "nt"}:
         os.replace(source, target)
         return
+    if os.name == "nt":
+        os.rename(source, target)
+        return
     source_bytes = os.fsencode(source)
     target_bytes = os.fsencode(target)
     libc = ctypes.CDLL(None, use_errno=True)
+    primitive_result: int | None = None
     if sys.platform.startswith("linux"):
         renameat2 = getattr(libc, "renameat2", None)
         if renameat2 is None:
-            raise OSError(errno.ENOTSUP, "atomic no-replace rename is unavailable")
+            _rename_no_replace_fallback(source, target)
+            return
         renameat2.argtypes = [
             ctypes.c_int,
             ctypes.c_char_p,
@@ -189,21 +268,25 @@ def _rename_no_replace(source: Path, target: Path) -> None:
             ctypes.c_uint,
         ]
         renameat2.restype = ctypes.c_int
-        result = renameat2(-100, source_bytes, -100, target_bytes, 1)
+        primitive_result = renameat2(-100, source_bytes, -100, target_bytes, 1)
     elif sys.platform == "darwin":
         renamex_np = getattr(libc, "renamex_np", None)
         if renamex_np is None:
-            raise OSError(errno.ENOTSUP, "atomic no-replace rename is unavailable")
+            _rename_no_replace_fallback(source, target)
+            return
         renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
         renamex_np.restype = ctypes.c_int
-        result = renamex_np(source_bytes, target_bytes, 0x4)
-    elif os.name == "nt":
-        os.rename(source, target)
-        return
+        primitive_result = renamex_np(source_bytes, target_bytes, 0x4)
     else:
-        raise OSError(errno.ENOTSUP, "atomic no-replace rename is unavailable")
-    if result != 0:
+        _rename_no_replace_fallback(source, target)
+        return
+    if primitive_result != 0:
         error = ctypes.get_errno()
+        if error in _RENAME_FLAG_UNSUPPORTED_ERRNOS:
+            # The kernel or filesystem rejected the no-replace flag itself, so
+            # no rename was attempted. Degrade instead of failing the swap.
+            _rename_no_replace_fallback(source, target)
+            return
         raise OSError(error, os.strerror(error), target)
 
 
