@@ -28,3 +28,19 @@ Eight new focused event tests cover empty, short, boundary, long, Korean/emoji/
 combining-mark and whitespace inputs, preview privacy and distinct long counts.
 The existing handler call site was inspected; no live host or first-Seed E2E
 acceptance is claimed. See the accompanying execution report for suite results.
+
+## Read-only evidence export follow-up
+
+`scripts/export_interview_effort.py --db <EventStore SQLite path>` exports
+JSONL with hashed interview IDs, recorded response-event counts, known
+submitted-response character totals and unknown-count event counts.
+`response_chars_total` is null when any recorded response lacks a valid
+nonnegative integer count. Legacy previews are never used to guess a count.
+The database is opened read-only; a missing database is not created.
+
+The output is a summary of recorded response events, not a host-visible turn
+count or a completeness guarantee for an interview. Missing events cannot be
+inferred. It does not claim first-Seed completion or deduplicate independently
+re-emitted events. Raw text, raw identities, paths and arbitrary payload fields
+are not exported. Thirteen additional tests cover exact/unknown/legacy counts,
+malformed rows, separation, privacy, missing DB and unchanged database bytes.
