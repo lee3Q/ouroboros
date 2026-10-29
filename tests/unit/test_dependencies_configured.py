@@ -161,13 +161,13 @@ def test_mcp_claude_cli_and_sdk_profiles_have_explicit_contracts():
     groups = pyproject["dependency-groups"]
     conflicts = pyproject["tool"]["uv"]["conflicts"]
 
-    assert optional_deps["mcp"] == ["mcp==2.2.0"]
+    assert optional_deps["mcp"] == ["mcp==2.3.0"]
     sdk_pins = [
         "claude-agent-sdk==0.2.165",
         "anthropic==1.13.0",
         # SDK 0.2.144 dropped its own MCP 1.x ceiling; the profile contract
-        # keeps the 1.x graph through this explicit pin.
-        "mcp==1.28.1",
+        # follows the MCP 2.x graph through this explicit pin.
+        "mcp==2.3.0",
     ]
     assert optional_deps["claude"] == sdk_pins
     assert optional_deps["claude-cli"] == []
@@ -175,7 +175,7 @@ def test_mcp_claude_cli_and_sdk_profiles_have_explicit_contracts():
     assert "mcp" not in optional_deps["all"][0]
     assert "claude-sdk" not in optional_deps["all"][0]
     assert "claude" in optional_deps["all"][0]
-    assert groups["mcp-test"] == ["mcp==2.2.0"]
+    assert groups["mcp-test"] == ["mcp==2.3.0"]
     assert groups["claude-sdk-test"] == ["ouroboros-ai[claude-sdk]"]
     assert not any("mcp" in dep or "claude" in dep for dep in groups["dev"])
     assert [
