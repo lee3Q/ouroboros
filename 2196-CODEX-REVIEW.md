@@ -55,3 +55,9 @@ Both failed on the older exact `70293b58` baseline control. On the actual `90cde
 - Earlier reported conflict failures from an incorrectly resolved local tree were withdrawn and are not evidence against this corrected tree.
 - No final independent review of this exact source was completed. The user's Codex review retains final judgment.
 - Investigate the ancestor-swap failure and fat-harness failure before treating this as merge-ready. Do not close unrelated issues based on this scoped draft.
+
+## Follow-up: deterministic timestamp fixture and subprocess environment
+
+After the initial publication, the exact fetched `183f55838abd804425cf9bc17824031ca2dcc168` tree plus an eight-line test-only correction ran the same full selection with **1541 passed, 1 skipped** on Linux Python 3.14.9. Ruff check passed. The test process used `PATH=/tmp/q00-fix-work/.venv/bin:$PATH` so the verifier's nested `python -m pytest` used the same environment. The earlier PATH selected a different Python launcher; changing PATH alone made the fat-harness True node pass. This is environment-specific evidence, not a production bug fix or a claim that the initial failures never occurred.
+
+The ancestor-swap fixture now changes the outside artifact's timestamp by one second after the real command and before `tracker.observe(completion)`. A bare `touch` had left mtime/ctime unchanged on this host, failing the fixture's mutation prerequisite before its security assertions. The mutation is deliberately before observation so the rejection assertions still exercise the changed file. Production security behavior was not modified. This does not replace native-platform security review or all-PR integration testing.
