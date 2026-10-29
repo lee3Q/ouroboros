@@ -18,7 +18,10 @@ class GateSummary:
     def render(self) -> str:
         known = self.forced + self.gated
         rate = f"{100 * self.forced / known:.1f}%" if known else "unavailable"
+        total = known + self.unknown
+        coverage = f"{100 * known / total:.1f}%" if total else "unavailable"
         return (
+            f"Unique Seed IDs: {total}\nRecorded-decision coverage: {coverage}\n"
             f"Forced: {self.forced}\nGated: {self.gated}\n"
             f"Unknown: {self.unknown}\nUnreadable files: {self.unreadable}\n"
             f"Override rate (recorded decisions only): {rate}\n"
@@ -35,9 +38,13 @@ def summarize_gate_decisions(directory: Path) -> GateSummary:
     decisions: dict[str, bool | None] = {}
     unreadable = 0
     for path in sorted(directory.iterdir()):
-        if path.suffix.lower() not in {".json", ".yaml", ".yml"} or not path.is_file():
+        if path.suffix.lower() not in {".json", ".yaml", ".yml"}:
             continue
         try:
+            if path.is_symlink():
+                raise ValueError("symlink is not a local Seed file")
+            if not path.is_file():
+                continue
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
             metadata = data.get("metadata") if isinstance(data, dict) else None
             if not isinstance(metadata, dict):
