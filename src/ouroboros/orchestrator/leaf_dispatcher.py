@@ -67,6 +67,7 @@ from ouroboros.orchestrator.runtime_message_projection import (
     message_tool_name,
     project_runtime_message,
 )
+from ouroboros.orchestrator.runtime_stream import isolated_runtime_stream
 from ouroboros.orchestrator.verify_shell import project_verify_environment
 
 if TYPE_CHECKING:
@@ -720,197 +721,200 @@ class LeafDispatcher:
         # the runtime used to write them (see evidence/harness_observation.py).
         workspace_before = snapshot_workspace(task_cwd)
 
-        with (
-            _BashFilesystemLeaseTracker(task_cwd=task_cwd) as identity_tracker,
-            anyio.CancelScope(
-                deadline=anyio.current_time() + STALL_TIMEOUT_SECONDS,
-            ) as stall_scope,
-        ):
-            async for message in executor._adapter.execute_task(
+        async with isolated_runtime_stream(
+            executor._adapter.execute_task(
                 prompt=prompt,
                 tools=tools,
                 system_prompt=system_prompt,
                 resume_handle=state.runtime_handle,
                 **execute_effort_kwargs,
+            )
+        ) as runtime_messages:
+            with (
+                _BashFilesystemLeaseTracker(task_cwd=task_cwd) as identity_tracker,
+                anyio.CancelScope(
+                    deadline=anyio.current_time() + STALL_TIMEOUT_SECONDS,
+                ) as stall_scope,
             ):
-                # Reset stall deadline on every message (RC6 core)
-                stall_scope.deadline = anyio.current_time() + STALL_TIMEOUT_SECONDS
-                if message.resume_handle is not None:
-                    augmented_handle = executor._augment_ac_runtime_handle(
-                        message.resume_handle,
-                        runtime_identity=runtime_identity,
-                        previous_handle=state.runtime_handle,
-                    )
-                    state.runtime_handle = executor._remember_ac_runtime_handle(
-                        ac_index,
-                        augmented_handle,
-                        execution_context_id=execution_context_id,
-                        is_sub_ac=is_sub_ac,
-                        parent_ac_index=parent_ac_index,
-                        sub_ac_index=sub_ac_index,
-                        node_identity=node_identity,
-                        retry_attempt=retry_attempt,
-                    )
-
-                if state.runtime_handle is not None and state.runtime_handle.native_session_id:
-                    state.ac_session_id = state.runtime_handle.native_session_id
-                elif (
-                    message.resume_handle is None
-                    and isinstance(message.data.get("session_id"), str)
-                    and message.data["session_id"]
-                ):
-                    state.ac_session_id = message.data["session_id"]
-
-                state.runtime_handle = executor._with_native_session_id(
-                    state.runtime_handle, state.ac_session_id
-                )
-                if state.runtime_handle is not None and message.resume_handle is not None:
-                    message = replace(message, resume_handle=state.runtime_handle)
-
-                message = identity_tracker.observe(message)
-
-                recovery_discontinuity = executor._runtime_recovery_discontinuity(
-                    state.runtime_handle
-                )
-                if recovery_discontinuity is not None:
-                    replacement = recovery_discontinuity.get("replacement", {})
-                    replacement_turn_id = replacement.get("turn_id")
-                    if isinstance(replacement_turn_id, str) and replacement_turn_id:
-                        if replacement_turn_id not in emitted_recovery_turn_ids:
-                            await executor._emit_ac_runtime_event(
-                                event_type="execution.session.recovered",
-                                runtime_identity=runtime_identity,
-                                ac_content=ac_content,
-                                runtime_handle=state.runtime_handle,
-                                execution_id=execution_context_id,
-                                session_id=state.ac_session_id,
-                                orchestrator_session_id=session_id,
-                            )
-                            state.lifecycle_event_count += 1
-                            emitted_recovery_turn_ids.add(replacement_turn_id)
-
-                state.messages.append(message)
-                state.message_count += 1
-                if execution_counters is not None:
-                    async with executor._execution_counters_lock:
-                        execution_counters["messages_count"] = (
-                            execution_counters.get("messages_count", 0) + 1
+                async for message in runtime_messages:
+                    # Reset stall deadline on every message (RC6 core)
+                    stall_scope.deadline = anyio.current_time() + STALL_TIMEOUT_SECONDS
+                    if message.resume_handle is not None:
+                        augmented_handle = executor._augment_ac_runtime_handle(
+                            message.resume_handle,
+                            runtime_identity=runtime_identity,
+                            previous_handle=state.runtime_handle,
+                        )
+                        state.runtime_handle = executor._remember_ac_runtime_handle(
+                            ac_index,
+                            augmented_handle,
+                            execution_context_id=execution_context_id,
+                            is_sub_ac=is_sub_ac,
+                            parent_ac_index=parent_ac_index,
+                            sub_ac_index=sub_ac_index,
+                            node_identity=node_identity,
+                            retry_attempt=retry_attempt,
                         )
 
-                # RC1: Emit heartbeat piggybacking on message flow
-                now = time.monotonic()
-                if now - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
-                    await executor._event_emitter.emit_heartbeat(
-                        session_id=session_id,
-                        ac_index=ac_index,
-                        ac_id=runtime_identity.ac_id,
-                        elapsed_seconds=now - exec_start,
-                        message_count=state.message_count,
-                        node_identity=node_identity,
+                    if state.runtime_handle is not None and state.runtime_handle.native_session_id:
+                        state.ac_session_id = state.runtime_handle.native_session_id
+                    elif (
+                        message.resume_handle is None
+                        and isinstance(message.data.get("session_id"), str)
+                        and message.data["session_id"]
+                    ):
+                        state.ac_session_id = message.data["session_id"]
+
+                    state.runtime_handle = executor._with_native_session_id(
+                        state.runtime_handle, state.ac_session_id
                     )
-                    last_heartbeat = now
+                    if state.runtime_handle is not None and message.resume_handle is not None:
+                        message = replace(message, resume_handle=state.runtime_handle)
 
-                projected = project_runtime_message(message)
-                await executor._event_emitter.observe_ac_activity(
-                    runtime_identity=runtime_identity,
-                    execution_id=execution_context_id,
-                    session_id=session_id,
-                    semantic_ac_key=semantic_ac_key,
-                    projected=projected,
-                    is_final=message.is_final,
-                )
+                    message = identity_tracker.observe(message)
 
-                persisted_session_id = executor._runtime_resume_session_id(state.runtime_handle)
-                if not lifecycle_emitted and persisted_session_id:
-                    await executor._emit_ac_runtime_event(
-                        event_type=lifecycle_event_type,
-                        runtime_identity=runtime_identity,
-                        ac_content=ac_content,
-                        runtime_handle=state.runtime_handle,
-                        execution_id=execution_context_id,
-                        session_id=persisted_session_id,
-                        orchestrator_session_id=session_id,
+                    recovery_discontinuity = executor._runtime_recovery_discontinuity(
+                        state.runtime_handle
                     )
-                    lifecycle_emitted = True
-                    state.lifecycle_event_count += 1
-                    executor._remember_ac_runtime_handle(
-                        ac_index,
-                        state.runtime_handle,
-                        execution_context_id=execution_context_id,
-                        is_sub_ac=is_sub_ac,
-                        parent_ac_index=parent_ac_index,
-                        sub_ac_index=sub_ac_index,
-                        node_identity=node_identity,
-                        retry_attempt=retry_attempt,
-                    )
+                    if recovery_discontinuity is not None:
+                        replacement = recovery_discontinuity.get("replacement", {})
+                        replacement_turn_id = replacement.get("turn_id")
+                        if isinstance(replacement_turn_id, str) and replacement_turn_id:
+                            if replacement_turn_id not in emitted_recovery_turn_ids:
+                                await executor._emit_ac_runtime_event(
+                                    event_type="execution.session.recovered",
+                                    runtime_identity=runtime_identity,
+                                    ac_content=ac_content,
+                                    runtime_handle=state.runtime_handle,
+                                    execution_id=execution_context_id,
+                                    session_id=state.ac_session_id,
+                                    orchestrator_session_id=session_id,
+                                )
+                                state.lifecycle_event_count += 1
+                                emitted_recovery_turn_ids.add(replacement_turn_id)
 
-                session_tool_event = executor._build_session_tool_called_event(
-                    session_id,
-                    projected=projected,
-                )
-                if session_tool_event is not None:
-                    await executor._event_store.append(session_tool_event)
-
-                if executor._should_emit_session_progress_event(
-                    message,
-                    projected=projected,
-                    messages_processed=len(state.messages),
-                ):
-                    session_progress_event = executor._build_session_progress_event(
-                        session_id,
-                        message,
-                        projected=projected,
-                    )
-                    await executor._event_store.append(session_progress_event)
-
-                if projected.is_tool_call and projected.tool_name is not None:
-                    # RC6: Tool invocations prove liveness — reset stall
-                    # deadline so long-running tools (Bash, external APIs)
-                    # are not falsely detected as stalls.
-                    stall_scope.deadline = anyio.current_time() + STALL_TIMEOUT_SECONDS
+                    state.messages.append(message)
+                    state.message_count += 1
                     if execution_counters is not None:
                         async with executor._execution_counters_lock:
-                            execution_counters["tool_calls_count"] = (
-                                execution_counters.get("tool_calls_count", 0) + 1
+                            execution_counters["messages_count"] = (
+                                execution_counters.get("messages_count", 0) + 1
                             )
-                    tool_input = projected.tool_input
-                    tool_detail = executor._format_tool_detail(projected.tool_name, tool_input)
-                    executor._console.print(f"{indent}[yellow]{label} → {tool_detail}[/yellow]")
-                    executor._flush_console()
 
-                    await executor._event_emitter.emit_atomic_tool_started(
+                    # RC1: Emit heartbeat piggybacking on message flow
+                    now = time.monotonic()
+                    if now - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
+                        await executor._event_emitter.emit_heartbeat(
+                            session_id=session_id,
+                            ac_index=ac_index,
+                            ac_id=runtime_identity.ac_id,
+                            elapsed_seconds=now - exec_start,
+                            message_count=state.message_count,
+                            node_identity=node_identity,
+                        )
+                        last_heartbeat = now
+
+                    projected = project_runtime_message(message)
+                    await executor._event_emitter.observe_ac_activity(
                         runtime_identity=runtime_identity,
-                        tool_name=projected.tool_name,
-                        tool_detail=tool_detail,
-                        tool_input=tool_input,
-                        runtime_metadata=executor._runtime_event_metadata(message),
+                        execution_id=execution_context_id,
+                        session_id=session_id,
+                        semantic_ac_key=semantic_ac_key,
+                        projected=projected,
+                        is_final=message.is_final,
                     )
 
-                if projected.message_type == "tool_result":
-                    completed_tool_name = projected.tool_name or _correlated_tool_result_name(
-                        state.messages,
+                    persisted_session_id = executor._runtime_resume_session_id(state.runtime_handle)
+                    if not lifecycle_emitted and persisted_session_id:
+                        await executor._emit_ac_runtime_event(
+                            event_type=lifecycle_event_type,
+                            runtime_identity=runtime_identity,
+                            ac_content=ac_content,
+                            runtime_handle=state.runtime_handle,
+                            execution_id=execution_context_id,
+                            session_id=persisted_session_id,
+                            orchestrator_session_id=session_id,
+                        )
+                        lifecycle_emitted = True
+                        state.lifecycle_event_count += 1
+                        executor._remember_ac_runtime_handle(
+                            ac_index,
+                            state.runtime_handle,
+                            execution_context_id=execution_context_id,
+                            is_sub_ac=is_sub_ac,
+                            parent_ac_index=parent_ac_index,
+                            sub_ac_index=sub_ac_index,
+                            node_identity=node_identity,
+                            retry_attempt=retry_attempt,
+                        )
+
+                    session_tool_event = executor._build_session_tool_called_event(
+                        session_id,
+                        projected=projected,
+                    )
+                    if session_tool_event is not None:
+                        await executor._event_store.append(session_tool_event)
+
+                    if executor._should_emit_session_progress_event(
                         message,
-                    )
-                else:
-                    completed_tool_name = None
-                if completed_tool_name is not None:
-                    await executor._event_emitter.emit_atomic_tool_completed(
-                        runtime_identity=runtime_identity,
-                        tool_name=completed_tool_name,
-                        tool_result_text=projected.content,
-                        runtime_metadata=executor._runtime_event_metadata(message),
-                    )
+                        projected=projected,
+                        messages_processed=len(state.messages),
+                    ):
+                        session_progress_event = executor._build_session_progress_event(
+                            session_id,
+                            message,
+                            projected=projected,
+                        )
+                        await executor._event_store.append(session_progress_event)
 
-                if projected.thinking:
-                    await executor._event_emitter.emit_atomic_thinking(
-                        runtime_identity=runtime_identity,
-                        thinking_text=projected.thinking,
-                        runtime_metadata=executor._runtime_event_metadata(message),
-                    )
+                    if projected.is_tool_call and projected.tool_name is not None:
+                        # RC6: Tool invocations prove liveness — reset stall
+                        # deadline so long-running tools (Bash, external APIs)
+                        # are not falsely detected as stalls.
+                        stall_scope.deadline = anyio.current_time() + STALL_TIMEOUT_SECONDS
+                        if execution_counters is not None:
+                            async with executor._execution_counters_lock:
+                                execution_counters["tool_calls_count"] = (
+                                    execution_counters.get("tool_calls_count", 0) + 1
+                                )
+                        tool_input = projected.tool_input
+                        tool_detail = executor._format_tool_detail(projected.tool_name, tool_input)
+                        executor._console.print(f"{indent}[yellow]{label} → {tool_detail}[/yellow]")
+                        executor._flush_console()
 
-                if message.is_final:
-                    state.final_message = message.content
-                    state.success = not message.is_error
+                        await executor._event_emitter.emit_atomic_tool_started(
+                            runtime_identity=runtime_identity,
+                            tool_name=projected.tool_name,
+                            tool_detail=tool_detail,
+                            tool_input=tool_input,
+                            runtime_metadata=executor._runtime_event_metadata(message),
+                        )
+
+                    if projected.message_type == "tool_result":
+                        completed_tool_name = projected.tool_name or _correlated_tool_result_name(
+                            state.messages,
+                            message,
+                        )
+                    else:
+                        completed_tool_name = None
+                    if completed_tool_name is not None:
+                        await executor._event_emitter.emit_atomic_tool_completed(
+                            runtime_identity=runtime_identity,
+                            tool_name=completed_tool_name,
+                            tool_result_text=projected.content,
+                            runtime_metadata=executor._runtime_event_metadata(message),
+                        )
+
+                    if projected.thinking:
+                        await executor._event_emitter.emit_atomic_thinking(
+                            runtime_identity=runtime_identity,
+                            thinking_text=projected.thinking,
+                            runtime_metadata=executor._runtime_event_metadata(message),
+                        )
+
+                    if message.is_final:
+                        state.final_message = message.content
+                        state.success = not message.is_error
 
         # Check if stall was detected (CancelScope ate the Cancelled)
         state.stalled = stall_scope.cancelled_caught
