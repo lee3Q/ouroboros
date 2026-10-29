@@ -312,3 +312,49 @@ def test_capabilities_use_sdk_resume_and_translate_no_permission_or_tool_envelop
         permission_mode="bypassPermissions",
     )
     assert {item.parameter for item in negotiated} == {"tools", "permission_mode"}
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_terminal_stop_retries_in_shielded_finally() -> None:
+    import asyncio
+
+    entered = asyncio.Event()
+
+    class InterruptedStopClient(FakeClient):
+        async def stop_session(self, session_id: str) -> None:
+            self.stopped.append(session_id)
+            if len(self.stopped) == 1:
+                entered.set()
+                await asyncio.Event().wait()
+
+    client = InterruptedStopClient([_turn("Done")])
+    runtime = GjcRuntime(cwd="/tmp/project", coordinator_client_factory=_factory(client))
+
+    async def consume() -> None:
+        async for _ in runtime.execute_task("Do it"):
+            pass
+
+    task = asyncio.create_task(consume())
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert client.stopped == ["session-1", "session-1"]
+    assert client.closed
+
+
+@pytest.mark.asyncio
+async def test_terminal_stop_error_retries_once_before_closing() -> None:
+    from ouroboros.gjc.sdk_client import GjcCoordinatorError
+
+    class FailingStopClient(FakeClient):
+        async def stop_session(self, session_id: str) -> None:
+            self.stopped.append(session_id)
+            raise GjcCoordinatorError("stop unavailable")
+
+    client = FailingStopClient([_turn("Done")])
+    runtime = GjcRuntime(cwd="/tmp/project", coordinator_client_factory=_factory(client))
+    messages = [message async for message in runtime.execute_task("Do it")]
+    assert messages[-1].data["subtype"] == "success"
+    assert client.stopped == ["session-1", "session-1"]
+    assert client.closed
