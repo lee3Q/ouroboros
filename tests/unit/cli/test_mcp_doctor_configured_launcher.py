@@ -299,3 +299,147 @@ def test_finite_positive_timeout_preserves_valid_string_values(tmp_path: Path, t
     assert config.args == ("--token", "")
     assert config.env == {"TOKEN": "fixture-value", "EMPTY": ""}
     assert config.timeout == float(timeout)
+
+
+def _static_cli_app():
+    import typer
+
+    from ouroboros.cli.commands.mcp_doctor import register_doctor_command
+
+    app = typer.Typer()
+
+    @app.callback()
+    def group():
+        pass
+
+    register_doctor_command(app)
+    return app
+
+
+@pytest.fixture
+def static_cli(monkeypatch, tmp_path):
+    from contextlib import ExitStack
+
+    from typer.testing import CliRunner
+
+    from ouroboros.cli.commands import mcp_doctor
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.setattr(mcp_doctor, "_ALL_CHECKS", [])
+    with ExitStack() as stack:
+        blocked = [
+            stack.enter_context(patch(target))
+            for target in (
+                "ouroboros.cli.commands.mcp_doctor.MCPClientAdapter",
+                "ouroboros.cli.commands.mcp_doctor._probe_configured_launcher",
+                "ouroboros.cli.commands.mcp_doctor._probe_local_stdio",
+                "subprocess.Popen",
+            )
+        ]
+        yield CliRunner(), _static_cli_app(), tmp_path / "codex"
+        for operation in blocked:
+            operation.assert_not_called()
+
+
+def test_static_cli_default_does_not_inspect(static_cli):
+    cli, app, _home = static_cli
+    with patch("ouroboros.cli.commands.mcp_doctor._configured_launcher_probe_config") as parse:
+        result = cli.invoke(app, ["doctor", "--json"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == []
+    parse.assert_not_called()
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_static_cli_uses_codex_home_and_omits_sensitive_values(static_cli, json_output):
+    cli, app, home = static_cli
+    secret = "synthetic-static-secret"
+    _write_config(
+        home,
+        "[mcp_servers.ouroboros]\n"
+        f'command = "https://user:{secret}@example.invalid"\n'
+        f'args = ["--token", "{secret}"]\nenv = {{ TOKEN = "{secret}" }}\n',
+    )
+    args = ["doctor", "--inspect-configured-launcher"] + (["--json"] if json_output else [])
+    result = cli.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+    assert "https://user:" not in result.output
+    assert "--token" not in result.output
+    assert "configured_launcher_inspection" in result.output
+    if json_output:
+        assert json.loads(result.stdout)[0]["status"] == "pass"
+
+
+def test_static_cli_default_home_uses_canonical_resolver(static_cli, monkeypatch, tmp_path):
+    cli, app, _home = static_cli
+    monkeypatch.delenv("CODEX_HOME")
+    _write_config(tmp_path / ".codex", '[mcp_servers.ouroboros]\ncommand = "fixture"\n')
+    with patch("ouroboros.codex.home.Path.home", return_value=tmp_path):
+        result = cli.invoke(app, ["doctor", "--inspect-configured-launcher", "--json"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)[0]["status"] == "pass"
+
+
+@pytest.mark.parametrize(
+    "kind", ["missing", "entry_missing", "malformed", "type", "unicode", "read_error"]
+)
+def test_static_cli_inspection_failure_boundaries(static_cli, kind):
+    from contextlib import nullcontext
+
+    cli, app, home = static_cli
+    secret = "synthetic-failure-secret"
+    if kind == "entry_missing":
+        _write_config(home, '[mcp_servers.other]\ncommand = "fixture"\n')
+    elif kind == "malformed":
+        _write_config(home, f'command = "{secret}\n')
+    elif kind == "type":
+        _write_config(home, f'[mcp_servers.ouroboros]\ncommand = ["{secret}"]\n')
+    elif kind == "unicode":
+        _write_config(home, "").write_bytes(b"\xff\xfe synthetic-failure-secret")
+    elif kind == "read_error":
+        _write_config(home, '[mcp_servers.ouroboros]\ncommand = "fixture"\n')
+    context = (
+        patch("pathlib.Path.read_text", side_effect=PermissionError(secret))
+        if kind == "read_error"
+        else nullcontext()
+    )
+    with context:
+        result = cli.invoke(app, ["doctor", "--inspect-configured-launcher", "--json"])
+    expected = "warn" if kind in {"missing", "entry_missing"} else "fail"
+    assert result.exit_code == (0 if expected == "warn" else 1), result.output
+    assert json.loads(result.stdout)[0]["status"] == expected
+    assert secret not in result.output
+
+
+def test_static_cli_snapshot_does_not_suppress_inspection(static_cli):
+    cli, app, home = static_cli
+    _write_config(home, '[mcp_servers.ouroboros]\ncommand = "fixture"\n')
+    snapshot = MagicMock()
+    snapshot.to_dict.return_value = {"fixture": {"status": "ok", "value": "safe"}}
+    with patch("ouroboros.mcp.machine_snapshot.collect_machine_snapshot", return_value=snapshot):
+        result = cli.invoke(
+            app, ["doctor", "--machine-snapshot", "--inspect-configured-launcher", "--json"]
+        )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["checks"][0]["name"] == "configured_launcher_inspection"
+    assert payload["checks"][0]["status"] == "pass"
+    assert payload["machine_snapshot"] == snapshot.to_dict.return_value
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_static_cli_snapshot_preserves_inspection_failure(static_cli, json_output):
+    cli, app, home = static_cli
+    _write_config(home, '[mcp_servers.ouroboros]\ncommand = ["invalid"]\n')
+    snapshot = MagicMock()
+    snapshot.to_dict.return_value = {}
+    args = ["doctor", "--machine-snapshot", "--inspect-configured-launcher"]
+    if json_output:
+        args.append("--json")
+    with patch("ouroboros.mcp.machine_snapshot.collect_machine_snapshot", return_value=snapshot):
+        result = cli.invoke(app, args)
+    assert result.exit_code == 1, result.output
+    assert "configured_launcher_inspection" in result.output
+    if json_output:
+        assert json.loads(result.stdout)["checks"][0]["status"] == "fail"
