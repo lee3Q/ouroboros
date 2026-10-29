@@ -184,8 +184,8 @@ BRIDGE_PLUGIN_FILENAME: str = "ouroboros-bridge.ts"
 def is_bridge_plugin_entry(entry: object) -> bool:
     """Return ``True`` when *entry* refers to any bridge-plugin install.
 
-    Matches by directory-tail (``plugins/ouroboros-bridge``) + basename
-    (``ouroboros-bridge.ts``) rather than exact string equality — catches
+    Matches V1 file entries, V2 directory entries and migrated index files
+    by the exact ``plugins/ouroboros-bridge`` directory tail rather than full path equality — catches
     stale entries from XDG reshuffles, Windows mixed separators, legacy
     install paths, and sudo/root migrations. Setup uses this for dedupe;
     uninstall uses it to remove stale entries, not just the exact
@@ -196,10 +196,13 @@ def is_bridge_plugin_entry(entry: object) -> bool:
     # Normalise path separators so Windows entries (``\``) compare equal.
     normalised = entry.replace("\\", "/")
     parts = [p for p in normalised.split("/") if p]
-    if len(parts) < 3:
-        return False
+    # V1 registers the source file; V2 registers its containing directory.
+    # Recognize manually migrated index entries too, without matching another
+    # plugin's index file or a similarly named package/directory.
+    if len(parts) >= 2 and tuple(parts[-2:]) == BRIDGE_PLUGIN_SUBDIR:
+        return True
     return (
-        parts[-1] == BRIDGE_PLUGIN_FILENAME
-        and parts[-2] == BRIDGE_PLUGIN_SUBDIR[1]
-        and parts[-3] == BRIDGE_PLUGIN_SUBDIR[0]
+        len(parts) >= 3
+        and parts[-1] in (BRIDGE_PLUGIN_FILENAME, "index.ts", "index.js")
+        and tuple(parts[-3:-1]) == BRIDGE_PLUGIN_SUBDIR
     )
