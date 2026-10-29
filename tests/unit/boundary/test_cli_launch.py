@@ -232,3 +232,9 @@ async def test_src_layout_never_becomes_tier_a_without_import_origin_proof(tmp_p
     admission = await admit_check_package(_cli_package(root, "-m pkg.mod"), root)
     assert _oracle_result(admission.checks[0])["resolve"] == "unprovable"
     assert admission.check_tiers == {"oracle_1": "U"}
+
+
+async def test_src_layout_reason_reaches_admission_result(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "repo", {"src/pkg/__init__.py": "", "src/pkg/mod.py": RIGHT})
+    admission = await admit_check_package(_cli_package(root, "-m pkg.mod"), root)
+    assert "checkout_src_module_requires_import_origin_proof" in admission.checks[0].output_tail
