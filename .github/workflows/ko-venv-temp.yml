@@ -1,0 +1,70 @@
+name: Temporary Korean PowerShell venv verification
+on:
+  push:
+    branches: [codex/ko-venv-check-ropttwas]
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.repository == 'lee3Q/ouroboros'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run exact Korean block in temporary directories
+        shell: pwsh
+        env:
+          PY_PYTHON: "3"
+          PY_PYTHON3: ${{ matrix.python }}
+          EXPECTED_PYTHON: ${{ matrix.python }}
+          PIP_INDEX_URL: https://pypi.org/simple
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:PYLAUNCHER_ALLOW_INSTALL -ErrorAction SilentlyContinue
+          Remove-Item Env:PYLAUNCHER_ALWAYS_INSTALL -ErrorAction SilentlyContinue
+          $selected = (& py -3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')").Trim()
+          if ($LASTEXITCODE -ne 0 -or $selected -ne $env:EXPECTED_PYTHON) { throw "Unexpected py selection: $selected" }
+          $block = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('JEVycm9yQWN0aW9uUHJlZmVyZW5jZSA9ICJTdG9wIgpweSAtMyAtLXZlcnNpb24KaWYgKCRMQVNURVhJVENPREUgLW5lIDApIHsgdGhyb3cgIlB5dGhvbiAzLjEyIOydtOyDgeydhCBQeXRob24gTGF1bmNoZXLsl5Ag7ISk7LmYIOuYkOuKlCDrk7HroZ3tlZjshLjsmpQuIiB9CnB5IC0zIC1jICJpbXBvcnQgc3lzOyByYWlzZSBTeXN0ZW1FeGl0KDAgaWYgc3lzLnZlcnNpb25faW5mbyA+PSAoMywgMTIpIGVsc2UgMSkiCmlmICgkTEFTVEVYSVRDT0RFIC1uZSAwKSB7IHRocm93ICLshKDtg53rkJwgUHl0aG9u7J20IDMuMTLrs7Tri6Qg64Ku7Iq164uI64ukLiIgfQppZiAoVGVzdC1QYXRoIC5cb3Vyb2Jvcm9zLWNsaS1lbnYpIHsgdGhyb3cgIuydtOuvuCDsobTsnqztlZjripQg6rK966Gc7J6F64uI64ukLiDri6Trpbgg7IOIIO2PtOuNlOulvCDshKDtg53tlZjshLjsmpQuIiB9Ck5ldy1JdGVtIC1JdGVtVHlwZSBEaXJlY3RvcnkgLVBhdGggLlxvdXJvYm9yb3MtY2xpLWVudiB8IE91dC1OdWxsClNldC1Mb2NhdGlvbiAuXG91cm9ib3Jvcy1jbGktZW52CnB5IC0zIC1tIHZlbnYgLnZlbnYKaWYgKCRMQVNURVhJVENPREUgLW5lIDApIHsgdGhyb3cgIuqwgOyDge2ZmOqyvSDsg53shLHsl5Ag7Iuk7Yyo7ZaI7Iq164uI64ukLiIgfQouXC52ZW52XFNjcmlwdHNccHl0aG9uLmV4ZSAtbSBwaXAgaW5zdGFsbCBvdXJvYm9yb3MtYWkKaWYgKCRMQVNURVhJVENPREUgLW5lIDApIHsgdGhyb3cgIu2MqO2CpOyngCDshKTsuZjsl5Ag7Iuk7Yyo7ZaI7Iq164uI64ukLiIgfQouXC52ZW52XFNjcmlwdHNccHl0aG9uLmV4ZSAtbSBvdXJvYm9yb3MgLS12ZXJzaW9uCmlmICgkTEFTVEVYSVRDT0RFIC1uZSAwKSB7IHRocm93ICJDTEkg7ZmV7J247JeQIOyLpO2MqO2WiOyKteuLiOuLpC4iIH0K'))
+          $root = Join-Path $env:RUNNER_TEMP 'ko-venv-fresh'
+          if (Test-Path $root) { throw 'Refusing existing test directory' }
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $script = Join-Path $root 'exact.ps1'
+          [IO.File]::WriteAllText($script, $block, [Text.UTF8Encoding]::new($false))
+          $constraint = Join-Path $root 'constraint.txt'
+          [IO.File]::WriteAllText($constraint, "ouroboros-ai==0.59.9`n", [Text.UTF8Encoding]::new($false))
+          $env:PIP_CONSTRAINT = $constraint
+          Push-Location $root
+          try { $output = & pwsh -NoLogo -NoProfile -NonInteractive -File $script 2>&1; $code=$LASTEXITCODE } finally { Pop-Location }
+          Write-Host "Exact block exit: $code"
+          $target = Join-Path $root 'ouroboros-cli-env'
+          if ($selected -eq '3.11') {
+            if ($code -eq 0 -or (Test-Path $target)) { throw 'Version guard failed' }
+            if (($output | Out-String) -notlike '*3.12*') { throw 'Version guard message absent' }
+            Write-Host 'PASS: Python 3.11 rejected before folder creation'
+          } else {
+            if ($code -ne 0) { $output | Out-String | Write-Host; throw 'Exact block failed' }
+            $python = Join-Path $target '.venv/Scripts/python.exe'
+            if (-not (Test-Path $python)) { throw 'venv Python missing' }
+            $ver = (& $python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')").Trim()
+            $pkg = (& $python -c "import importlib.metadata as m; print(m.version('ouroboros-ai'))").Trim()
+            if ($ver -ne $selected -or $pkg -ne '0.59.9') { throw "Unexpected venv: $ver $pkg" }
+            Write-Host "PASS: fresh path, venv Python $ver, package $pkg"
+            $existing = Join-Path $env:RUNNER_TEMP 'ko-venv-existing'
+            if (Test-Path $existing) { throw 'Refusing existing test directory' }
+            New-Item -ItemType Directory -Path (Join-Path $existing 'ouroboros-cli-env') -Force | Out-Null
+            $sentinel=Join-Path $existing 'ouroboros-cli-env/sentinel.txt'
+            [IO.File]::WriteAllText($sentinel, 'preserve', [Text.UTF8Encoding]::new($false))
+            Push-Location $existing
+            try { $guard = & pwsh -NoLogo -NoProfile -NonInteractive -File $script 2>&1; $guardCode=$LASTEXITCODE } finally { Pop-Location }
+            if ($guardCode -eq 0 -or [IO.File]::ReadAllText($sentinel) -ne 'preserve') { throw 'Existing-path protection failed' }
+            if (($guard | Out-String) -notlike '*존재하는 경로*') { throw 'Existing-path rejection message absent' }
+            Write-Host 'PASS: existing path rejected and sentinel preserved'
+          }
+          $global:LASTEXITCODE = 0
