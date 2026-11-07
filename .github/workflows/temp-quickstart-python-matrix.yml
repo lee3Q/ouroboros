@@ -1,0 +1,125 @@
+name: Temporary quickstart direct-interpreter smoke
+on:
+  push:
+    branches: [codex/quickstart-python-matrix-20261107-rv4m1]
+permissions:
+  contents: read
+jobs:
+  windows:
+    if: github.repository == 'lee3Q/ouroboros'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Test direct venv interpreter, folder change, and PATH sentinel
+        shell: pwsh
+        env:
+          EXPECTED_PYTHON: ${{ matrix.python }}
+          PY_PYTHON: "3"
+          PY_PYTHON3: ${{ matrix.python }}
+          PIP_INDEX_URL: https://pypi.org/simple
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          EN_BLOCK: JEVycm9yQWN0aW9uUHJlZmVyZW5jZSA9ICJTdG9wIgpweSAtMyAtLXZlcnNpb24KaWYgKCRMQVNURVhJVENPREUgLW5lIDApIHsgdGhyb3cgIkluc3RhbGwvcmVnaXN0ZXIgUHl0aG9uIDMuMTIgb3IgbGF0ZXIgd2l0aCB0aGUgUHl0aG9uIGxhdW5jaGVyLiIgfQpweSAtMyAtYyAiaW1wb3J0IHN5czsgcmFpc2UgU3lzdGVtRXhpdCgwIGlmIHN5cy52ZXJzaW9uX2luZm8gPj0gKDMsIDEyKSBlbHNlIDEpIgppZiAoJExBU1RFWElUQ09ERSAtbmUgMCkgeyB0aHJvdyAiVGhlIHNlbGVjdGVkIFB5dGhvbiBpcyBvbGRlciB0aGFuIDMuMTI7IGluc3RhbGwvcmVnaXN0ZXIgUHl0aG9uIDMuMTIgb3IgbGF0ZXIuIiB9CmlmIChUZXN0LVBhdGggLlxvdXJvYm9yb3MtY2xpLWVudikgeyB0aHJvdyAiQ2hvb3NlIGEgbmV3IGZvbGRlcjsgdGhpcyBwYXRoIGFscmVhZHkgZXhpc3RzLiIgfQpOZXctSXRlbSAtSXRlbVR5cGUgRGlyZWN0b3J5IC1QYXRoIC5cb3Vyb2Jvcm9zLWNsaS1lbnYgfCBPdXQtTnVsbApTZXQtTG9jYXRpb24gLlxvdXJvYm9yb3MtY2xpLWVudgpweSAtMyAtbSB2ZW52IC52ZW52CmlmICgkTEFTVEVYSVRDT0RFIC1uZSAwKSB7IHRocm93ICJWaXJ0dWFsIGVudmlyb25tZW50IGNyZWF0aW9uIGZhaWxlZC4iIH0KJE91cm9ib3Jvc1B5dGhvbiA9IChSZXNvbHZlLVBhdGggLlwudmVudlxTY3JpcHRzXHB5dGhvbi5leGUpLlBhdGgKJE91cm9ib3Jvc1B5dGhvbgomICRPdXJvYm9yb3NQeXRob24gLW0gcGlwIGluc3RhbGwgb3Vyb2Jvcm9zLWFpCmlmICgkTEFTVEVYSVRDT0RFIC1uZSAwKSB7IHRocm93ICJQYWNrYWdlIGluc3RhbGxhdGlvbiBmYWlsZWQuIiB9CiYgJE91cm9ib3Jvc1B5dGhvbiAtbSBvdXJvYm9yb3MgLS12ZXJzaW9uCmlmICgkTEFTVEVYSVRDT0RFIC1uZSAwKSB7IHRocm93ICJDTEkgdmVyaWZpY2F0aW9uIGZhaWxlZC4iIH0=
+          ZH_BLOCK: JEVycm9yQWN0aW9uUHJlZmVyZW5jZSA9ICJTdG9wIgpweSAtMyAtLXZlcnNpb24KaWYgKCRMQVNURVhJVENPREUgLW5lIDApIHsgdGhyb3cgIuivt+mAmui/hyBQeXRob24gTGF1bmNoZXIg5a6J6KOF5oiW5rOo5YaMIFB5dGhvbiAzLjEyIOaIluabtOmrmOeJiOacrOOAgiIgfQpweSAtMyAtYyAiaW1wb3J0IHN5czsgcmFpc2UgU3lzdGVtRXhpdCgwIGlmIHN5cy52ZXJzaW9uX2luZm8gPj0gKDMsIDEyKSBlbHNlIDEpIgppZiAoJExBU1RFWElUQ09ERSAtbmUgMCkgeyB0aHJvdyAi5omA6YCJIFB5dGhvbiDniYjmnKzkvY7kuo4gMy4xMu+8m+ivt+WuieijheaIluazqOWGjCBQeXRob24gMy4xMiDmiJbmm7Tpq5jniYjmnKzjgIIiIH0KaWYgKFRlc3QtUGF0aCAuXG91cm9ib3Jvcy1jbGktZW52KSB7IHRocm93ICLor7flj6bpgInkuIDkuKrmlrDnm67lvZXvvJvmraTot6/lvoTlt7LlrZjlnKjjgIIiIH0KTmV3LUl0ZW0gLUl0ZW1UeXBlIERpcmVjdG9yeSAtUGF0aCAuXG91cm9ib3Jvcy1jbGktZW52IHwgT3V0LU51bGwKU2V0LUxvY2F0aW9uIC5cb3Vyb2Jvcm9zLWNsaS1lbnYKcHkgLTMgLW0gdmVudiAudmVudgppZiAoJExBU1RFWElUQ09ERSAtbmUgMCkgeyB0aHJvdyAi6Jma5ouf546v5aKD5Yib5bu65aSx6LSl44CCIiB9CiRPdXJvYm9yb3NQeXRob24gPSAoUmVzb2x2ZS1QYXRoIC5cLnZlbnZcU2NyaXB0c1xweXRob24uZXhlKS5QYXRoCiRPdXJvYm9yb3NQeXRob24KJiAkT3Vyb2Jvcm9zUHl0aG9uIC1tIHBpcCBpbnN0YWxsIG91cm9ib3Jvcy1haQppZiAoJExBU1RFWElUQ09ERSAtbmUgMCkgeyB0aHJvdyAi6L2v5Lu25YyF5a6J6KOF5aSx6LSl44CCIiB9CiYgJE91cm9ib3Jvc1B5dGhvbiAtbSBvdXJvYm9yb3MgLS12ZXJzaW9uCmlmICgkTEFTVEVYSVRDT0RFIC1uZSAwKSB7IHRocm93ICJDTEkg54mI5pys5qOA5p+l5aSx6LSl44CCIiB9
+          KO_BLOCK: JE91cm9ib3Jvc1B5dGhvbiA9IChSZXNvbHZlLVBhdGggLlwudmVudlxTY3JpcHRzXHB5dGhvbi5leGUpLlBhdGgKJE91cm9ib3Jvc1B5dGhvbgomICRPdXJvYm9yb3NQeXRob24gLW0gb3Vyb2Jvcm9zIC0tdmVyc2lvbg==
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:PYLAUNCHER_ALLOW_INSTALL -ErrorAction SilentlyContinue
+          Remove-Item Env:PYLAUNCHER_ALWAYS_INSTALL -ErrorAction SilentlyContinue
+          $selected = (& py -3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')").Trim()
+          if ($LASTEXITCODE -ne 0 -or $selected -ne $env:EXPECTED_PYTHON) { throw "Expected Python $($env:EXPECTED_PYTHON), selected $selected" }
+          $base = Join-Path $env:RUNNER_TEMP ('direct-interpreter-' + $selected)
+          if (Test-Path $base) { throw 'Refusing an existing runner directory' }
+          New-Item -ItemType Directory -Path $base | Out-Null
+          $constraint = Join-Path $base 'constraints.txt'
+          [IO.File]::WriteAllText($constraint, "ouroboros-ai==0.59.9`n", [Text.UTF8Encoding]::new($false))
+          $env:PIP_CONSTRAINT = $constraint
+          $sentinelDir = Join-Path $base 'path-sentinel'
+          New-Item -ItemType Directory -Path $sentinelDir | Out-Null
+          $sentinelHit = Join-Path $base 'path-sentinel-invoked.txt'
+          $sentinel = "@echo off`r`necho sentinel> `"$sentinelHit`"`r`nexit /b 91`r`n"
+          [IO.File]::WriteAllText((Join-Path $sentinelDir 'ouroboros.cmd'), $sentinel, [Text.Encoding]::ASCII)
+          $env:PATH = "$sentinelDir;$env:PATH"
+          $resolved = (Get-Command ouroboros -ErrorAction Stop).Source
+          if ($resolved -ne (Join-Path $sentinelDir 'ouroboros.cmd')) { throw "PATH sentinel did not shadow bare CLI: $resolved" }
+          Write-Host "PATH sentinel selected: $resolved"
+          $scripts = @{
+            en = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:EN_BLOCK))
+            zh = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:ZH_BLOCK))
+            ko = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:KO_BLOCK))
+          }
+          if ($selected -eq '3.11') {
+            foreach ($language in @('en','zh')) {
+              $case = Join-Path $base "negative-$language"
+              New-Item -ItemType Directory -Path $case | Out-Null
+              $script = Join-Path $case 'quickstart.ps1'
+              [IO.File]::WriteAllText($script, $scripts[$language], [Text.UTF8Encoding]::new($false))
+              Push-Location $case
+              try { $output = & pwsh -NoLogo -NoProfile -NonInteractive -File $script 2>&1; $code = $LASTEXITCODE } finally { Pop-Location }
+              if ($code -eq 0 -or (Test-Path (Join-Path $case 'ouroboros-cli-env'))) { throw "$language did not reject 3.11 before creating its target" }
+              if (($output | Out-String) -notlike '*3.12*') { throw "$language rejection did not explain the minimum version" }
+              Write-Host "PASS: $language block rejects Python 3.11 before directory creation"
+            }
+            Write-Host 'KO quickstart direct-path snippet assumes an already-created venv; its referenced legacy setup guide is outside this 3.11 inline-block test.'
+            exit 0
+          }
+          foreach ($language in @('en','zh')) {
+            $case = Join-Path $base $language
+            New-Item -ItemType Directory -Path $case | Out-Null
+            $script = Join-Path $case 'quickstart.ps1'
+            [IO.File]::WriteAllText($script, $scripts[$language], [Text.UTF8Encoding]::new($false))
+            Push-Location $case
+            try { . $script } finally { Pop-Location }
+            $venvPython = $OuroborosPython
+            if (-not [IO.Path]::IsPathFullyQualified($venvPython) -or -not (Test-Path $venvPython)) { throw "$language did not retain a valid absolute interpreter path" }
+            $info = (& $venvPython -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}|{sys.executable}')").Trim()
+            if ($LASTEXITCODE -ne 0 -or $info.Split('|')[0] -ne $selected -or [IO.Path]::GetFullPath($info.Split('|')[1]) -ne [IO.Path]::GetFullPath($venvPython)) { throw "$language venv interpreter differs: $info" }
+            $version = (& $venvPython -c "import importlib.metadata as m; print(m.version('ouroboros-ai'))").Trim()
+            if ($LASTEXITCODE -ne 0 -or $version -ne '0.59.9') { throw "$language package version mismatch: $version" }
+            $project = Join-Path $case 'project-after-cd'
+            New-Item -ItemType Directory -Path $project | Out-Null
+            Set-Location $project
+            & $venvPython -m ouroboros --version
+            if ($LASTEXITCODE -ne 0) { throw "$language direct interpreter failed after Set-Location" }
+            if (Test-Path $sentinelHit) { throw "$language direct interpreter invoked PATH sentinel" }
+            Set-Location $base
+            Write-Host "PASS: $language venv Python $selected, package $version, direct -m CLI works after Set-Location; PATH sentinel untouched"
+            $existing = Join-Path $base "existing-$language"
+            New-Item -ItemType Directory -Path (Join-Path $existing 'ouroboros-cli-env') | Out-Null
+            $existingSentinel = Join-Path $existing 'ouroboros-cli-env/sentinel.txt'
+            [IO.File]::WriteAllText($existingSentinel, 'preserve', [Text.Encoding]::ASCII)
+            $script2 = Join-Path $existing 'quickstart.ps1'
+            [IO.File]::WriteAllText($script2, $scripts[$language], [Text.UTF8Encoding]::new($false))
+            Push-Location $existing
+            try { $guardOutput = & pwsh -NoLogo -NoProfile -NonInteractive -File $script2 2>&1; $guardCode = $LASTEXITCODE } finally { Pop-Location }
+            if ($guardCode -eq 0 -or [IO.File]::ReadAllText($existingSentinel) -ne 'preserve') { throw "$language existing-path guard failed or changed sentinel" }
+            Write-Host "PASS: $language existing-path rejection preserved sentinel"
+          }
+          # KO's current quickstart assumes a venv already exists and documents an absolute path lookup.
+          $koRoot = Join-Path $base 'ko'
+          if (Test-Path $koRoot) { throw 'Refusing existing KO runner directory' }
+          New-Item -ItemType Directory -Path $koRoot | Out-Null
+          Push-Location $koRoot
+          try {
+            py -3 -m venv .venv
+            if ($LASTEXITCODE -ne 0) { throw 'KO fixture venv creation failed' }
+            & .\.venv\Scripts\python.exe -m pip install ouroboros-ai
+            if ($LASTEXITCODE -ne 0) { throw 'KO fixture package install failed' }
+            Invoke-Expression $scripts['ko']
+            $venvPython = $OuroborosPython
+            $info = (& $venvPython -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}|{sys.executable}')").Trim()
+            if ($LASTEXITCODE -ne 0 -or $info.Split('|')[0] -ne $selected -or [IO.Path]::GetFullPath($info.Split('|')[1]) -ne [IO.Path]::GetFullPath($venvPython)) { throw "KO venv interpreter differs: $info" }
+            $project = Join-Path $koRoot 'project-after-cd'
+            New-Item -ItemType Directory -Path $project | Out-Null
+            Set-Location $project
+            & $venvPython -m ouroboros --version
+            if ($LASTEXITCODE -ne 0 -or (Test-Path $sentinelHit)) { throw 'KO direct interpreter / PATH sentinel check failed after Set-Location' }
+          } finally { Pop-Location }
+          Write-Host "PASS: KO direct-path snippet uses $selected venv Python after Set-Location; PATH sentinel untouched"
+          $global:LASTEXITCODE = 0
