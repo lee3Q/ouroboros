@@ -69,7 +69,9 @@ function NewChat({ defaults }: { defaults: ChatDefaults | undefined }) {
   const { t, tx } = useT();
   const ids = useId();
   const [goal, setGoal] = useState("");
+  const [executionBackend, setExecutionBackend] = useState(FOLLOW);
   const [mode, setMode] = useState<ChatMode>("interview");
+  const usePreview = mode === "interview";
   const [cwd, setCwd] = useState("");
   const [backend, setBackend] = useState(FOLLOW);
   const [model, setModel] = useState("");
@@ -79,7 +81,7 @@ function NewChat({ defaults }: { defaults: ChatDefaults | undefined }) {
     if (defaults && !cwd) setCwd(defaults.cwd);
   }, [defaults, cwd]);
   // An agent that cannot serve the new mode falls back to the settings default.
-  const pool: BackendChoice[] = (mode === "ask" ? defaults?.llm : defaults?.agents) ?? [];
+  const pool: BackendChoice[] = ((mode === "ask" || usePreview ? defaults?.llm : defaults?.agents) ?? []).filter((item) => !usePreview || item.id === "litellm");
   useEffect(() => {
     if (backend !== FOLLOW && !pool.some((item) => item.id === backend)) setBackend(FOLLOW);
   }, [backend, pool]);
@@ -88,10 +90,12 @@ function NewChat({ defaults }: { defaults: ChatDefaults | undefined }) {
     async () => {
       const session = await post<ChatSession>("/api/chat/sessions", {
         goal,
+        preview_first: usePreview,
+        execution_backend: usePreview && executionBackend !== FOLLOW ? executionBackend : "",
         mode,
         cwd,
-        backend: backend === FOLLOW ? "" : backend,
-        model: mode === "ask" ? model : "",
+        backend: usePreview ? "litellm" : backend === FOLLOW ? "" : backend,
+        model: mode === "ask" || usePreview ? model : "",
       });
       invalidate("/api/chat/sessions");
       navigate("chat", session.id);
@@ -99,10 +103,10 @@ function NewChat({ defaults }: { defaults: ChatDefaults | undefined }) {
     { tx, failTitle: t("chat.new.failed") },
   );
 
-  const chosen = pool.find((item) => item.id === backend);
+  const chosen = pool.find((item) => item.id === (usePreview ? "litellm" : backend));
   const suggestions = [
     ...(chosen?.models ?? []).filter((item) => item !== "default"),
-    ...(backend === "litellm" ? (defaults?.providers ?? []).map((item) => item.model_format) : []),
+    ...((backend === "litellm" || usePreview) ? (defaults?.providers ?? []).map((item) => item.model_format) : []),
   ];
   const followed = mode === "ask" ? undefined : defaults?.default_runtime;
 
@@ -114,7 +118,7 @@ function NewChat({ defaults }: { defaults: ChatDefaults | undefined }) {
   return (
     <motion.form className="composer-hero" onSubmit={submit} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}>
       <h1 className="composer-hero-title">{t(`chat.new.title.${mode}`)}</h1>
-      <p className="composer-hero-lead">{t(`chat.mode.${mode}.lead`)}</p>
+      <p className="composer-hero-lead">{usePreview ? t("chat.preview.lead") : t(`chat.mode.${mode}.lead`)}</p>
       <Segmented<ChatMode>
         label={t("chat.mode")}
         value={mode}
@@ -125,6 +129,7 @@ function NewChat({ defaults }: { defaults: ChatDefaults | undefined }) {
           { value: "ask", label: t("chat.mode.ask"), icon: <Sparkles size={14} aria-hidden /> },
         ]}
       />
+        {usePreview ? <p>{t("chat.preview.intro")}</p> : null}
       <div className="composer-box">
         <label className="sr-only" htmlFor={`${ids}-goal`}>
           {t(`chat.new.title.${mode}`)}
@@ -177,8 +182,8 @@ function NewChat({ defaults }: { defaults: ChatDefaults | undefined }) {
             </div>
           </Field>
         ) : null}
-        <Field label={mode === "ask" ? t("chat.new.backend") : t("chat.new.agent")} htmlFor={`${ids}-agent`} hint={mode === "ask" ? undefined : t("chat.new.agent.hint")}>
-          <Picker
+        <Field label={usePreview ? t("chat.preview.provider") : mode === "ask" ? t("chat.new.backend") : t("chat.new.agent")} htmlFor={`${ids}-agent`} hint={mode === "ask" || usePreview ? undefined : t("chat.new.agent.hint")}>
+          {usePreview ? <input id={`${ids}-agent`} className="input" value="LiteLLM" readOnly /> : <Picker
             id={`${ids}-agent`}
             value={backend}
             onChange={setBackend}
@@ -186,10 +191,11 @@ function NewChat({ defaults }: { defaults: ChatDefaults | undefined }) {
               { value: FOLLOW, label: followed ? t("chat.new.follow", { agent: backendName(followed) }) : t("chat.new.followPlain") },
               ...pool.map((item) => ({ value: item.id, label: backendName(item.id), hint: item.installed ? undefined : t("models.notInstalled") })),
             ]}
-          />
+          />}
         </Field>
-        {mode === "ask" ? (
-          <Field label={t("models.model")} htmlFor={`${ids}-model`} hint={backend === "litellm" ? t("chat.new.model.litellm") : t("chat.new.model.hint")}>
+        {usePreview ? <Field label={t("chat.preview.executor")} htmlFor={`${ids}-executor`}><select id={`${ids}-executor`} className="input" value={executionBackend} onChange={(event) => setExecutionBackend(event.target.value)}><option value={FOLLOW}>{t("chat.preview.follow")}</option>{(defaults?.agents ?? []).map((item) => <option key={item.id} value={item.id}>{backendName(item.id)}</option>)}</select></Field> : null}
+        {mode === "ask" || usePreview ? (
+          <Field label={t("models.model")} htmlFor={`${ids}-model`} hint={backend === "litellm" || usePreview ? t("chat.new.model.litellm") : t("chat.new.model.hint")}>
             <input id={`${ids}-model`} className="input input-mono" list={`${ids}-models`} value={model} spellCheck={false} autoComplete="off" placeholder={t("chat.new.model.placeholder")} onChange={(event) => setModel(event.target.value)} />
             <datalist id={`${ids}-models`}>
               {suggestions.map((item) => (
@@ -393,6 +399,29 @@ function MessageView({ message, running, questionNumber }: { message: ChatMessag
   let body: ReactNode;
   let shape = "left";
   switch (message.kind) {
+    case "preview": {
+      const p = message.preview;
+      body = p ? (
+        <div className="bubble-card">
+          <h3>{p.decision === "ready" ? t("chat.preview.ready") : p.decision === "ask" ? t("chat.preview.ask") : t("chat.preview.draft")}</h3>
+          <p>{p.goal || p.reason}</p>
+          <ol>{p.scenes.map((scene, i) => (
+            <li key={i}>
+              <p><strong>{t("chat.preview.action")}</strong> {scene.user_action}</p>
+              <p><strong>{t("chat.preview.result")}</strong> {scene.visible_result}</p>
+              <p><strong>{t("chat.preview.failure")}</strong> {scene.failure_alternative}</p>
+            </li>
+          ))}</ol>
+          {p.required_decisions.length > 0 ? <><h4>{t("chat.preview.decisions")}</h4><ul>{p.required_decisions.map((v, i) => <li key={i}>{v}</li>)}</ul></> : null}
+          <h4>{t("chat.preview.criteria")}</h4><ul>{p.acceptance_criteria?.map((v, i) => <li key={i}>{v}</li>)}</ul>
+          {p.constraints?.length ? <><h4>{t("chat.preview.constraints")}</h4><ul>{p.constraints.map((v, i) => <li key={i}>{v}</li>)}</ul></> : null}
+          {p.assumptions.length ? <><h4>{t("chat.preview.assumptions")}</h4><ul>{p.assumptions.map((v, i) => <li key={i}>{v}</li>)}</ul></> : null}
+          <details><summary>{t("chat.preview.evidence")}</summary><p>{p.reason}</p><ul>{p.evidence.map((v, i) => <li key={i}>{v}</li>)}</ul></details>
+          <p>{p.next_question || t("chat.preview.correct")}</p>
+        </div>
+      ) : <p>{t("chat.preview.unavailable")}</p>;
+      break;
+    }
     case "question":
       body = (
         <div className="bubble bubble-question">
@@ -520,9 +549,12 @@ function ContextPane({ session }: { session: ChatSession }) {
             <dd>{t(`chat.mode.${session.mode}`)}</dd>
           </div>
           <div>
-            <dt>{t("models.agent")}</dt>
+            <dt>{session.preview_first ? t("chat.preview.provider") : t("models.agent")}</dt>
             <dd>{session.backend ? backendName(session.backend) : t("chat.new.followPlain")}</dd>
           </div>
+          {session.preview_first && session.execution_backend ? (
+            <div><dt>{t("chat.preview.executor")}</dt><dd>{backendName(session.execution_backend)}</dd></div>
+          ) : null}
           {session.model ? (
             <div>
               <dt>{t("models.model")}</dt>
@@ -698,10 +730,10 @@ function Thread({ id }: { id: string }) {
   }
 
   const { status, mode } = session;
-  const ask = mode === "ask";
-  const canType = ask ? ["waiting_answer", "done", "failed", "interrupted"].includes(status) : status === "waiting_answer";
+  const ask = mode === "ask" || !!session.preview_first;
+  const canType = ask ? ["waiting_answer", "seed_ready", "done", "failed", "interrupted"].includes(status) : status === "waiting_answer";
   const suggestion = session.suggestion;
-  const canWriteSeed = mode === "interview" && !!session.interview_session_id && ["waiting_answer", "seed_ready_to_write", "interrupted", "failed"].includes(status) && !session.seed_yaml;
+  const canWriteSeed = mode === "interview" && (session.preview_first ? !!session.preview_revision && status === "waiting_answer" : !!session.interview_session_id) && ["waiting_answer", "seed_ready_to_write", "interrupted", "failed"].includes(status) && !session.seed_yaml;
   const seedReady = !!session.seed_ready || status === "seed_ready_to_write";
   const canRun = mode === "interview" && !!session.seed_yaml && status !== "running" && status !== "thinking" && status !== "done";
   const busyAction = (name: string) => acting && lastAction === name;
@@ -750,7 +782,7 @@ function Thread({ id }: { id: string }) {
         </IconButton>
       </header>
 
-      {mode === "interview" && typeof session.ambiguity === "number" ? <AmbiguityMeter value={session.ambiguity} /> : null}
+      {!session.preview_first && mode === "interview" && typeof session.ambiguity === "number" ? <AmbiguityMeter value={session.ambiguity} /> : null}
 
       <div
         className="thread-scroll"
@@ -832,11 +864,11 @@ function Thread({ id }: { id: string }) {
           {canWriteSeed && seedReady ? (
             <motion.div key="seed" className="next-step" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
               <div>
-                <strong>{t("chat.next.seed.title")}</strong>
-                <span>{t("chat.next.seed.body")}</span>
+                <strong>{session.preview_first ? t("chat.preview.readyNote") : t("chat.next.seed.title")}</strong>
+                <span>{session.preview_first ? t("chat.preview.saveNote") : t("chat.next.seed.body")}</span>
               </div>
-              <Button variant="primary" icon={<Sprout size={15} aria-hidden />} pending={busyAction("seed")} onClick={() => void run("seed")}>
-                {t("chat.next.seed")}
+              <Button variant="primary" icon={<Sprout size={15} aria-hidden />} pending={busyAction("seed")} onClick={() => void run("seed", session.preview_first ? { revision: session.preview_revision } : {})}>
+                {session.preview_first ? t("chat.preview.save") : t("chat.next.seed")}
               </Button>
             </motion.div>
           ) : null}
@@ -844,9 +876,9 @@ function Thread({ id }: { id: string }) {
             <motion.div key="run" className="next-step" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
               <div>
                 <strong>{t("chat.next.run.title")}</strong>
-                <span>{t("chat.next.run.body")}</span>
+                <span>{session.preview_first && session.execution_backend ? `${backendName(session.execution_backend)} · ` : ""}{t("chat.next.run.body")}</span>
               </div>
-              <Button variant="primary" icon={<Play size={15} aria-hidden />} pending={busyAction("run")} onClick={() => void run("run")}>
+              <Button variant="primary" icon={<Play size={15} aria-hidden />} pending={busyAction("run")} onClick={() => void run("run", session.preview_first ? { revision: session.preview_revision } : {})}>
                 {status === "failed" || status === "interrupted" ? t("chat.next.runAgain") : t("chat.next.run")}
               </Button>
             </motion.div>
@@ -876,8 +908,9 @@ function Thread({ id }: { id: string }) {
           ) : null}
         </AnimatePresence>
 
-        {mode !== "auto" && !(mode === "interview" && (session.seed_yaml || status === "seed_ready_to_write")) ? (
+        {mode !== "auto" && (session.preview_first || !(mode === "interview" && (session.seed_yaml || status === "seed_ready_to_write"))) ? (
           <form className="composer-box composer-inline" onSubmit={submit} data-disabled={!canType || undefined}>
+
             <label className="sr-only" htmlFor="thread-input">
               {ask ? t("chat.input.ask") : t("chat.input.answer")}
             </label>
@@ -894,12 +927,12 @@ function Thread({ id }: { id: string }) {
             />
             <div className="composer-bar">
               <div className="composer-tools">
-                {mode === "interview" ? (
+                {mode === "interview" && !session.preview_first ? (
                   <Button size="sm" variant="ghost" icon={<Sparkles size={14} aria-hidden />} pending={busyAction("suggest") || !!suggestion?.pending} disabled={status !== "waiting_answer" || !session.last_question} onClick={() => void run("suggest")}>
                     {t("chat.suggest")}
                   </Button>
                 ) : null}
-                {canWriteSeed && !seedReady ? (
+                {canWriteSeed && !seedReady && !session.preview_first ? (
                   <Button size="sm" variant="ghost" icon={<Sprout size={14} aria-hidden />} pending={busyAction("seed")} onClick={() => void run("seed", { force: true })} title={t("chat.seed.early.hint")}>
                     {t("chat.seed.early")}
                   </Button>

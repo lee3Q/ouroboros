@@ -63,6 +63,7 @@ from ouroboros.interview_calibration import normalize_interview_calibration
 from ouroboros.mcp.errors import MCPServerError, MCPToolError
 from ouroboros.mcp.host_context import resolve_request_subagent_dispatch
 from ouroboros.mcp.tools import interview_opening_decisions as opening_decisions
+from ouroboros.mcp.tools import session_seed_handler as seed_summary
 from ouroboros.mcp.tools.advisory_dispatch import (
     append_question_advisory_dispatch,
     echo_carries_dispatch,
@@ -990,9 +991,7 @@ class GenerateSeedHandler:
 
     def _handle_session_context_seed(self, ctx: Any) -> Result[MCPToolResult, MCPServerError]:
         """Interview-less crystallization (RFC D6) — see session_seed_handler."""
-        from ouroboros.mcp.tools.session_seed_handler import handle_session_context_seed
-
-        return handle_session_context_seed(ctx)
+        return seed_summary.handle_session_context_seed(ctx)
 
     async def handle(
         self,
@@ -1152,7 +1151,7 @@ class GenerateSeedHandler:
                     "=========================\n"
                     f"Seed ID: {reference_seed.metadata.seed_id}\n"
                     f"Interview ID: {reference_seed.metadata.interview_id}\n"
-                    f"Ambiguity Score: {reference_seed.metadata.ambiguity_score:.2f}\n"
+                    f"Ambiguity Score: {seed_summary.format_seed_ambiguity_score(reference_seed.metadata.ambiguity_score)}\n"
                     f"Goal: {reference_seed.goal}\n\n"
                     "--- Seed YAML ---\n"
                     f"{seed_yaml}"
@@ -1333,7 +1332,7 @@ class GenerateSeedHandler:
                 f"=========================\n"
                 f"Seed ID: {seed.metadata.seed_id}\n"
                 f"Interview ID: {seed.metadata.interview_id}\n"
-                f"Ambiguity Score: {seed.metadata.ambiguity_score:.2f}\n"
+                f"Ambiguity Score: {seed_summary.format_seed_ambiguity_score(seed.metadata.ambiguity_score)}\n"
                 f"Goal: {seed.goal}\n\n"
                 f"--- Seed YAML ---\n"
                 f"{seed_yaml}"
