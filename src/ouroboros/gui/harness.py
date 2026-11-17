@@ -433,9 +433,27 @@ class Harness:
         project = _interview_project(payload.get("project"), cwd) if mode == "interview" else None
         backend = str(payload.get("backend") or "").strip() or None
         model = str(payload.get("model") or "").strip() or None
+        preview_first = (
+            mode == "interview"
+            and payload.get("preview_first", backend in (None, "litellm")) is True
+        )
+        if preview_first:
+            backend = backend or "litellm"
+        if preview_first and backend != "litellm":
+            raise ValueError("Preview requires the LiteLLM completion backend.")
         if backend:
-            _validate_backend(backend, mode)
+            _validate_backend(backend, "ask" if preview_first else mode)
             _require_installed(backend)
+        execution_backend = str(payload.get("execution_backend") or "").strip() or None
+        if preview_first:
+            if execution_backend is None:
+                from ouroboros.gui.settings import SettingsModel
+
+                execution_backend = SettingsModel().effective_stage_backend(
+                    settings_stage("execute")
+                )
+            _validate_backend(execution_backend, "interview")
+            _require_installed(execution_backend)
         session_id = uuid.uuid4().hex[:12]
         session: dict[str, Any] = {
             "id": session_id,
@@ -450,12 +468,16 @@ class Harness:
             "created_at": _now(),
             "updated_at": _now(),
             "version": 0,
+            "preview_first": preview_first,
+            "execution_backend": execution_backend,
             "messages": [_msg("user", "text", goal)],
         }
         with self._lock:
             self._sessions[session_id] = session
             self._touch(session)
-        if mode == "auto":
+        if session["preview_first"]:
+            self._spawn(session_id, self._readiness_preview(session_id))
+        elif mode == "auto":
             self._start_auto(session_id)
         elif mode == "ask":
             self._spawn(session_id, self._ask(session_id))
@@ -470,9 +492,11 @@ class Harness:
             raise Refusal("answer_empty", "Type an answer first.")
         with self._lock:
             session = self._require(session_id)
-            ask = session.get("mode") == "ask"
+            ask = session.get("mode") == "ask" or bool(session.get("preview_first"))
             ready = (
-                ("waiting_answer", "done", "failed", "interrupted") if ask else ("waiting_answer",)
+                ("waiting_answer", "seed_ready", "done", "failed", "interrupted")
+                if ask
+                else ("waiting_answer",)
             )
             if session.get("status") not in ready:
                 raise Refusal("not_waiting", "Ouroboros is not waiting for a message right now.")
@@ -481,13 +505,42 @@ class Harness:
             if corrects and not ask:
                 payload = _correction_payload(session, corrects, text)
                 extra["corrects"] = corrects
+            if session.get("preview_first"):
+                if session.get("run_start_pending"):
+                    raise ValueError(
+                        "Execution acceptance is uncertain. Check Runs before changing scope; no duplicate will be launched."
+                    )
+                if session.get("execution_id"):
+                    from ouroboros.dashboard_web.reader import default_db_path
+
+                    if not session.get("run_job_id") or not _job_terminal(
+                        str(default_db_path()), session["run_job_id"]
+                    ):
+                        raise ValueError(
+                            "Reconnect to the existing execution before changing its scope."
+                        )
+                for key in (
+                    "seed_yaml",
+                    "approved_revision",
+                    "approved_seed_digest",
+                    "preview_revision",
+                    "current_preview",
+                    "execution_id",
+                    "run_job_id",
+                    "run_session_id",
+                    "run_attempt",
+                ):
+                    session.pop(key, None)
+                session["seed_ready"] = False
             session["messages"].append(_msg("user", "text", text, **extra))
             session["status"] = "thinking"
             session["suggestion"] = {"pending": False}
             # A human answer resets the skill's Dialectic Rhythm Guard.
             session["assisted_in_a_row"] = 0
             self._touch(session)
-        if ask:
+        if session.get("preview_first"):
+            self._spawn(session_id, self._readiness_preview(session_id))
+        elif ask:
             self._spawn(session_id, self._ask(session_id))
         else:
             self._spawn(session_id, self._interview_answer(session_id, payload))
@@ -497,6 +550,58 @@ class Harness:
         with self._lock:
             session = self._require(session_id)
             status = session.get("status")
+            if session.get("preview_first"):
+                import hashlib
+
+                from ouroboros.gui.readiness_preview import preview_digest, reviewed_seed
+
+                revision = session.get("preview_revision")
+                current = session.get("current_preview")
+                if (
+                    not revision
+                    or not current
+                    or payload.get("revision") != revision
+                    or preview_digest(session_id, current, session["messages"]) != revision
+                ):
+                    raise ValueError("Review the current preview before granting permission.")
+                if action == "seed":
+                    if status != "waiting_answer":
+                        raise ValueError("Wait for the current preview before creating a Seed.")
+                    seed = reviewed_seed(current, session_id, revision)
+                    seed_yaml = yaml.safe_dump(seed.to_dict(), allow_unicode=True, sort_keys=False)
+                    session.update(
+                        seed_yaml=seed_yaml,
+                        approved_revision=revision,
+                        approved_seed_digest=hashlib.sha256(seed_yaml.encode()).hexdigest(),
+                        status="seed_ready",
+                    )
+                    session["messages"].append(
+                        _msg(
+                            "assistant",
+                            "seed",
+                            seed.goal,
+                            acceptance_criteria=list(current["acceptance_criteria"]),
+                            constraints=list(seed.constraints),
+                            seed_yaml=seed_yaml,
+                        )
+                    )
+                    self._touch(session)
+                    return self.get(session_id) or {}
+                if action != "run":
+                    raise ValueError("Use a correction message to revise this preview.")
+                if session.get("run_start_pending"):
+                    raise ValueError(
+                        "Execution acceptance is uncertain. Check Runs for the accepted job before retrying; no duplicate will be launched."
+                    )
+                if (
+                    status not in ("seed_ready", "failed", "interrupted")
+                    or session.get("approved_revision") != revision
+                    or session.get("approved_seed_digest")
+                    != hashlib.sha256(session.get("seed_yaml", "").encode()).hexdigest()
+                ):
+                    raise ValueError(
+                        "Create a Seed from the current reviewed scope before running."
+                    )
             if action == "seed":
                 if status not in ("waiting_answer", "seed_ready_to_write", "interrupted", "failed"):
                     raise Refusal("interview_busy", "The interview is still working.")
@@ -517,9 +622,37 @@ class Harness:
                 if not isinstance(prepare, bool):
                     raise Refusal("bad_prepare_git", "prepare_git must be true or false.")
                 self._ready_folder(session, prepare=prepare)
+                reconnect = False
+                if session.get("preview_first") and session.get("execution_id"):
+                    from ouroboros.dashboard_web.reader import default_db_path
+
+                    terminal = (
+                        _job_terminal(str(default_db_path()), session["run_job_id"])
+                        if session.get("run_job_id")
+                        else None
+                    )
+                    if (
+                        status == "failed"
+                        and terminal
+                        and terminal["status"] in ("failed", "cancelled", "interrupted")
+                    ):
+                        session["run_attempt"] = int(session.get("run_attempt", 0)) + 1
+                        for key in ("execution_id", "run_job_id", "run_session_id"):
+                            session.pop(key, None)
+                    else:
+                        reconnect = True
                 session["status"] = "running"
                 self._touch(session)
-                coro = self._start_run(session_id)
+                coro = (
+                    asyncio.to_thread(
+                        self._follow_run,
+                        session_id,
+                        session["execution_id"],
+                        session.get("run_job_id"),
+                    )
+                    if reconnect
+                    else self._start_run(session_id)
+                )
             elif action == "suggest":
                 if status != "waiting_answer" or not session.get("last_question"):
                     raise Refusal("no_question", "There is no open question to answer.")
@@ -706,6 +839,45 @@ class Harness:
             fn(session)
             self._touch(session)
 
+    async def _readiness_preview(self, session_id: str) -> None:
+        from ouroboros.config.loader import get_llm_model_for_role
+        from ouroboros.gui.readiness_preview import generate_preview
+        from ouroboros.providers.factory import create_llm_adapter
+
+        session = self.get(session_id) or {}
+        backend = session.get("backend") or None
+        if backend != "litellm":
+            raise ValueError(
+                "Preview requires LiteLLM; start a new preview with a completion provider."
+            )
+        model = session.get("model") or await asyncio.to_thread(
+            get_llm_model_for_role, "interview", backend=backend
+        )
+        adapter = await asyncio.to_thread(
+            create_llm_adapter,
+            backend=backend,
+            cwd=session["cwd"],
+            allowed_tools=[],
+            max_turns=1,
+            permission_mode="default",
+            strict_mcp_config=True,
+        )
+        preview = await generate_preview(adapter, session["messages"], str(model))
+
+        def apply(s: dict[str, Any]) -> None:
+            data = preview.model_dump()
+            s["messages"].append(
+                _msg("assistant", "preview", json.dumps(data, ensure_ascii=False), preview=data)
+            )
+            s["status"] = "waiting_answer"
+            s["seed_ready"] = preview.decision == "ready"
+            s["current_preview"] = data
+            from ouroboros.gui.readiness_preview import preview_digest
+
+            s["preview_revision"] = preview_digest(session_id, data, s["messages"])
+
+        self._update(session_id, apply)
+
     # interview ---------------------------------------------------------
 
     def _apply_turn(
@@ -778,7 +950,11 @@ class Harness:
             self._spawn_quiet(session_id, self._auto_investigate(session_id, turn_seq, asked))
 
     def _handlers_for(self, session: dict[str, Any]) -> _Handlers:
-        key = session.get("backend") or ""
+        key = (
+            session.get("execution_backend")
+            if session.get("preview_first")
+            else session.get("backend")
+        ) or ""
         with self._lock:
             handlers = self._handlers.get(key)
             if handlers is None:
@@ -847,10 +1023,22 @@ class Harness:
         session = self.get(session_id) or {}
         starter = await asyncio.to_thread(self._handlers_for(session).run_starter, session["cwd"])
         seed = Seed.from_dict(yaml.safe_load(session["seed_yaml"]))
-        meta = await starter(seed, idempotency_key=f"gui-{session_id}")
+        run_key = (
+            f"gui-{session_id}-{seed.metadata.seed_id}-{session.get('run_attempt', 0)}"
+            if session.get("preview_first")
+            else f"gui-{session_id}"
+        )
+        if session.get("preview_first"):
+            # Persist BEFORE crossing the dispatch boundary. The starter's
+            # idempotency cache is process-local and cannot protect a restart.
+            self._update(session_id, lambda s: s.update(run_start_pending=True))
+        meta = await starter(seed, idempotency_key=run_key)
         execution_id = meta.get("execution_id")
+        if session.get("preview_first") and not (execution_id and meta.get("job_id")):
+            raise ValueError("Execution receipt is incomplete. Check Runs before retrying.")
 
         def apply(s: dict[str, Any]) -> None:
+            s["run_start_pending"] = False
             s["execution_id"] = execution_id
             s["run_job_id"] = meta.get("job_id")
             s["run_session_id"] = meta.get("session_id")
@@ -900,14 +1088,14 @@ class Harness:
             job = _job_terminal(db_path, job_id) if job_id else None
             if (
                 job is not None
-                and job["status"] == "failed"
+                and job["status"] in ("failed", "cancelled", "interrupted")
                 and summary["status"] not in _TERMINAL_RUN
             ):
                 summary = {
                     **summary,
-                    "status": "failed",
+                    "status": "cancelled" if job["status"] == "cancelled" else "failed",
                     "activity": job["message"],
-                    "key": "job-failed",
+                    "key": "job-" + job["status"],
                 }
             if summary["key"] != last_summary:
                 last_summary = summary["key"]
@@ -1384,7 +1572,7 @@ def _job_terminal(db_path: str, job_id: str) -> dict[str, str] | None:
     try:
         row = conn.execute(
             "SELECT event_type, payload FROM events WHERE aggregate_id = ? "
-            "AND event_type IN ('mcp.job.failed', 'mcp.job.completed', 'mcp.job.cancelled') "
+            "AND event_type IN ('mcp.job.failed', 'mcp.job.completed', 'mcp.job.cancelled', 'mcp.job.interrupted') "
             "ORDER BY rowid DESC LIMIT 1",
             (job_id,),
         ).fetchone()
