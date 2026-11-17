@@ -624,7 +624,7 @@ def test_concurrent_chats_ask_their_agents_in_their_own_folders(
     chats = {}
     for name, folder in folders.items():
         folder.mkdir()
-        chats[name] = h.create({"goal": name, "cwd": str(folder)})["id"]
+        chats[name] = h.create({"goal": name, "cwd": str(folder), "preview_first": False})["id"]
     for chat_id in chats.values():
         _wait(h, chat_id, lambda s: s.get("status") == "waiting_answer")
         h.action(chat_id, "seed", {"force": True})

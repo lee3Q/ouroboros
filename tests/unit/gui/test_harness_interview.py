@@ -153,7 +153,11 @@ def _chat(
         return investigator
 
     monkeypatch.setattr(harness.Harness, "_repo_investigator", repo_investigator)
-    payload: dict[str, Any] = {"goal": "add a todo CLI to this repo", "cwd": str(cwd)}
+    payload: dict[str, Any] = {
+        "goal": "add a todo CLI to this repo",
+        "cwd": str(cwd),
+        "preview_first": False,
+    }
     if project is not None:
         payload["project"] = project
     chat = h.create(payload)

@@ -331,10 +331,24 @@ export interface RunProgress {
   activity: string | null;
 }
 
+export interface Preview {
+  goal: string;
+  acceptance_criteria: string[];
+  constraints: string[];
+  decision: "ask" | "preview" | "ready";
+  reason: string;
+  evidence: string[];
+  assumptions: string[];
+  required_decisions: string[];
+  next_question: string;
+  scenes: { user_action: string; visible_result: string; failure_alternative: string }[];
+}
+
 export interface ChatMessage {
+  preview?: Preview;
   id: string;
   role: "user" | "assistant" | "system";
-  kind: "text" | "question" | "note" | "error" | "seed" | "run" | "result" | "log";
+  kind: "preview" | "text" | "question" | "note" | "error" | "seed" | "run" | "result" | "log";
   text: string;
   ts: number;
   /** A fixed sentence the page translates (`chat.note.<key>`); `text` is its English. */
@@ -434,6 +448,12 @@ export interface ChatSessionRow {
 }
 
 export interface ChatSession extends ChatSessionRow {
+  preview_first?: boolean;
+  preview_revision?: string;
+  /** The reviewed preview that produced seed_yaml; the server also checks its digest. */
+  approved_revision?: string;
+  execution_backend?: string | null;
+  run_start_pending?: boolean;
   goal: string;
   version: number;
   messages: ChatMessage[];

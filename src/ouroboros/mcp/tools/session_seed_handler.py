@@ -22,6 +22,11 @@ from ouroboros.mcp.types import ContentType, MCPContentItem, MCPToolResult
 log = structlog.get_logger(__name__)
 
 
+def format_seed_ambiguity_score(score: float | None) -> str:
+    """Render absent measurements without inventing a numeric readiness signal."""
+    return "not measured" if score is None else f"{score:.2f}"
+
+
 def handle_session_context_seed(
     session_context: Any,
 ) -> Result[MCPToolResult, MCPServerError]:
@@ -77,12 +82,16 @@ def handle_session_context_seed(
         seed_id=seed.metadata.seed_id,
         criteria_count=len(seed.acceptance_criteria),
     )
+    score_note = (
+        "(gate was structural, not scored)"
+        if seed.metadata.ambiguity_score is None
+        else "(conservative ceiling — gate was structural, not scored)"
+    )
     result_text = (
         "Seed Generated Successfully (interview-less)\n"
         "============================================\n"
         f"Seed ID: {seed.metadata.seed_id}\n"
-        f"Ambiguity Score: {seed.metadata.ambiguity_score:.2f} "
-        "(conservative ceiling — gate was structural, not scored)\n"
+        f"Ambiguity Score: {format_seed_ambiguity_score(seed.metadata.ambiguity_score)} {score_note}\n"
         f"Goal: {seed.goal}\n\n"
         "--- Seed YAML ---\n"
         f"{seed_yaml}"
